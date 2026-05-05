@@ -1,0 +1,16 @@
+src/
+tests/
+examples/
+docs/
+.github/
+.changeset/
+node_modules/
+coverage/
+*.log
+*.tsbuildinfo
+tsconfig.json
+tsup.config.ts
+vitest.config.ts
+.eslintrc*
+.prettierrc*
+docker-compose*.yml

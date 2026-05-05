@@ -1,0 +1,166 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { createIncrementalCacheHandler } from "../../src/incremental/index.js";
+
+import { MockRedisClient } from "./_mock-client.js";
+
+const T0 = 1_700_000_000_000;
+
+let originalPhase: string | undefined;
+let originalDeployment: string | undefined;
+
+beforeEach(() => {
+  vi.useFakeTimers({ now: T0 });
+  originalPhase = process.env.NEXT_PHASE;
+  originalDeployment = process.env.DEPLOYMENT_VERSION;
+  delete process.env.NEXT_PHASE;
+});
+afterEach(() => {
+  vi.useRealTimers();
+  if (originalPhase === undefined) delete process.env.NEXT_PHASE;
+  else process.env.NEXT_PHASE = originalPhase;
+  if (originalDeployment === undefined) delete process.env.DEPLOYMENT_VERSION;
+  else process.env.DEPLOYMENT_VERSION = originalDeployment;
+});
+
+function setup() {
+  const client = new MockRedisClient();
+  client.isOpen = true;
+  const Handler = createIncrementalCacheHandler({
+    client: () => client,
+    abortTimeoutMs: 100,
+  });
+  return { Handler, client };
+}
+
+describe("incremental cacheHandler — basic ISR round-trip", () => {
+  it("set then get returns the stored record", async () => {
+    const { Handler } = setup();
+    const h = new Handler();
+    await h.set(
+      "/blog",
+      { kind: "APP_PAGE", body: Buffer.from("hello"), headers: {} },
+      { kind: "APP_PAGE" }
+    );
+    const out = await h.get("/blog", { kind: "APP_PAGE" });
+    expect(out).not.toBeNull();
+    expect(out?.lastModified).toBe(T0);
+    expect(Buffer.isBuffer((out?.value as unknown as { body: Buffer }).body)).toBe(true);
+  });
+
+  it("revalidatedTags in ctx force a cache miss for matching entries", async () => {
+    const { Handler } = setup();
+    const h = new Handler({ revalidatedTags: ["posts"] });
+    await h.set(
+      "/blog",
+      {
+        kind: "APP_PAGE",
+        body: Buffer.from("hello"),
+        headers: { "x-next-cache-tags": "posts,layout" },
+      },
+      { kind: "APP_PAGE" }
+    );
+    const out = await h.get("/blog", { kind: "APP_PAGE" });
+    expect(out).toBeNull();
+  });
+
+  it("revalidateTag (soft) writes a tag state that future get() observes", async () => {
+    const { Handler } = setup();
+    const h = new Handler();
+    await h.set(
+      "/blog",
+      {
+        kind: "FETCH",
+        revalidate: 60,
+        tags: ["posts"],
+        body: "x",
+      },
+      { kind: "FETCH" }
+    );
+    // Soft revalidate (no durations.expire).
+    vi.setSystemTime(new Date(T0 + 100));
+    await h.revalidateTag("posts");
+
+    // FETCH kind treats `stale` as expired → next get() returns null.
+    const out = await h.get("/blog", { kind: "FETCH" });
+    expect(out).toBeNull();
+  });
+
+  it("hard revalidate (durations.expire=0) propagates to APP_PAGE entries", async () => {
+    const { Handler } = setup();
+    const h = new Handler();
+    await h.set(
+      "/blog",
+      {
+        kind: "APP_PAGE",
+        body: Buffer.from("x"),
+        headers: { "x-next-cache-tags": "posts" },
+      },
+      { kind: "APP_PAGE" }
+    );
+    vi.setSystemTime(new Date(T0 + 100));
+    await h.revalidateTag("posts", { expire: 0 });
+    const out = await h.get("/blog", { kind: "APP_PAGE" });
+    expect(out).toBeNull();
+  });
+
+  it("instance-local: tag bypasses Redis (uses memory only)", async () => {
+    const { Handler, client } = setup();
+    const h = new Handler();
+    const setSpy = vi.spyOn(client, "set");
+    await h.set(
+      "/blog",
+      {
+        kind: "APP_PAGE",
+        body: Buffer.from("x"),
+        headers: { "x-next-cache-tags": "instance-local:user-1" },
+      },
+      { kind: "APP_PAGE" }
+    );
+    expect(setSpy).not.toHaveBeenCalled();
+    const out = await h.get("/blog", {
+      kind: "APP_PAGE",
+      tags: ["instance-local:user-1"],
+    });
+    expect(out).not.toBeNull();
+  });
+});
+
+describe("incremental cacheHandler — BUILD_NAMESPACE deployment isolation", () => {
+  it("entry from old DEPLOYMENT_VERSION is invisible after deploy roll", async () => {
+    process.env.DEPLOYMENT_VERSION = "deploy-A";
+    const { Handler, client } = setup();
+    let h = new Handler();
+    await h.set(
+      "/blog",
+      { kind: "APP_PAGE", body: Buffer.from("v1"), headers: {} },
+      { kind: "APP_PAGE" }
+    );
+
+    // Roll deployment.
+    process.env.DEPLOYMENT_VERSION = "deploy-B";
+    h = new Handler();
+    const out = await h.get("/blog", { kind: "APP_PAGE" });
+    expect(out).toBeNull();
+
+    // Old key is still in Redis (it'll TTL out), but the new namespace can't
+    // see it. This is exactly the static-chunk-404 incident remediation.
+    const keysWithOld = [...client.kv.keys()].filter((k) => k.includes("deploy-A"));
+    expect(keysWithOld.length).toBe(1);
+  });
+});
+
+describe("incremental cacheHandler — build phase skip", () => {
+  it("set() does not call Redis during phase-production-build", async () => {
+    process.env.NEXT_PHASE = "phase-production-build";
+    const { Handler, client } = setup();
+    const setSpy = vi.spyOn(client, "set");
+    const h = new Handler();
+    await h.set(
+      "/blog",
+      { kind: "APP_PAGE", body: Buffer.from("x"), headers: {} },
+      { kind: "APP_PAGE" }
+    );
+    expect(setSpy).not.toHaveBeenCalled();
+  });
+});

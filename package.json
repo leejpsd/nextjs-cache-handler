@@ -1,0 +1,169 @@
+{
+  "name": "@leejpsd/nextjs-cache-handler",
+  "version": "0.0.0",
+  "description": "The only Redis cache handler for Next.js 16 that ships both cacheHandler (ISR) and cacheHandlers ('use cache') — production-validated for multi-instance deployments where @fortedigital lists 'Help needed'.",
+  "keywords": [
+    "next",
+    "nextjs",
+    "next.js",
+    "next-16",
+    "cache",
+    "cache-handler",
+    "cache-components",
+    "use-cache",
+    "redis",
+    "ioredis",
+    "ISR",
+    "self-hosting",
+    "multi-instance"
+  ],
+  "license": "MIT",
+  "author": "Eddy Lee <leejpsd@gmail.com>",
+  "homepage": "https://github.com/leejpsd/nextjs-cache-handler#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/leejpsd/nextjs-cache-handler.git"
+  },
+  "bugs": {
+    "url": "https://github.com/leejpsd/nextjs-cache-handler/issues"
+  },
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "typesVersions": {
+    "*": {
+      "cache-components": ["./dist/cache-components/index.d.ts"],
+      "incremental": ["./dist/incremental/index.d.ts"],
+      "client/redis": ["./dist/shared/client/adapter-redis.d.ts"],
+      "client/ioredis": ["./dist/shared/client/adapter-ioredis.d.ts"],
+      "ops": ["./dist/ops/index.d.ts"]
+    }
+  },
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./cache-components": {
+      "import": {
+        "types": "./dist/cache-components/index.d.ts",
+        "default": "./dist/cache-components/index.js"
+      },
+      "require": {
+        "types": "./dist/cache-components/index.d.cts",
+        "default": "./dist/cache-components/index.cjs"
+      }
+    },
+    "./incremental": {
+      "import": {
+        "types": "./dist/incremental/index.d.ts",
+        "default": "./dist/incremental/index.js"
+      },
+      "require": {
+        "types": "./dist/incremental/index.d.cts",
+        "default": "./dist/incremental/index.cjs"
+      }
+    },
+    "./client/redis": {
+      "import": {
+        "types": "./dist/shared/client/adapter-redis.d.ts",
+        "default": "./dist/shared/client/adapter-redis.js"
+      },
+      "require": {
+        "types": "./dist/shared/client/adapter-redis.d.cts",
+        "default": "./dist/shared/client/adapter-redis.cjs"
+      }
+    },
+    "./client/ioredis": {
+      "import": {
+        "types": "./dist/shared/client/adapter-ioredis.d.ts",
+        "default": "./dist/shared/client/adapter-ioredis.js"
+      },
+      "require": {
+        "types": "./dist/shared/client/adapter-ioredis.d.cts",
+        "default": "./dist/shared/client/adapter-ioredis.cjs"
+      }
+    },
+    "./ops": {
+      "import": {
+        "types": "./dist/ops/index.d.ts",
+        "default": "./dist/ops/index.js"
+      },
+      "require": {
+        "types": "./dist/ops/index.d.cts",
+        "default": "./dist/ops/index.cjs"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist/",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "lint": "eslint src tests",
+    "lint:fix": "eslint src tests --fix",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
+    "test": "vitest run",
+    "test:unit": "vitest run tests/unit",
+    "test:integration": "vitest run tests/integration",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "format": "prettier --write \"src/**/*.{ts,tsx}\" \"tests/**/*.{ts,tsx}\"",
+    "verify": "npm run lint && npm run typecheck && npm run test:unit && npm run build",
+    "publint": "publint",
+    "attw": "attw --pack .",
+    "version:changesets": "changeset version",
+    "publish:changesets": "npm run build && changeset publish",
+    "prepublishOnly": "npm run verify && npm run publint && npm run attw"
+  },
+  "peerDependencies": {
+    "next": ">=16.1.5 <17",
+    "redis": ">=5.0.0",
+    "ioredis": ">=5.0.0"
+  },
+  "peerDependenciesMeta": {
+    "redis": {
+      "optional": true
+    },
+    "ioredis": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@arethetypeswrong/cli": "^0.17.0",
+    "@changesets/changelog-github": "^0.5.0",
+    "@changesets/cli": "^2.27.0",
+    "@types/node": "^22.10.0",
+    "@typescript-eslint/eslint-plugin": "^8.20.0",
+    "@typescript-eslint/parser": "^8.20.0",
+    "@vitest/coverage-v8": "^2.1.0",
+    "eslint": "^9.18.0",
+    "ioredis": "^5.4.0",
+    "next": "^16.1.5",
+    "prettier": "^3.4.0",
+    "publint": "^0.3.0",
+    "redis": "^5.0.0",
+    "tsup": "^8.3.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}

@@ -1,0 +1,621 @@
+/**
+ * Spec-compliant `cacheHandlers` (plural) implementation. See docs/next16-spec.md.
+ *
+ * This module owns the five required methods (`get`, `set`, `refreshTags`,
+ * `getExpiration`, `updateTags`) and threads them through:
+ *   - build-phase short-circuit                 (src/shared/build-phase.ts)
+ *   - per-call abort timeout                    (src/shared/abort.ts)
+ *   - in-memory fallback when Redis unavailable (src/shared/memory-fallback.ts)
+ *   - 3-axis SWR partition                      (./swr.ts)
+ *   - Lua-atomic SET-with-tags / hard-revalidate (src/shared/lua/)
+ *
+ * Error policy follows spec §6 verbatim — this module never re-throws on
+ * `get` / `set`. `updateTags` with `expire === 0` (hard expire) propagates
+ * so the user observes invalidation failures.
+ */
+
+import { CacheTimeoutError, withAbortSignal } from "../shared/abort.js";
+import { ConnectionManager } from "../shared/client/index.js";
+import { defaultLogger } from "../shared/logger.js";
+import { execLuaScript } from "../shared/lua/index.js";
+import { MemoryStore, MemorySetStore } from "../shared/memory-fallback.js";
+import { createEmitter } from "../shared/metrics.js";
+import { buildKey, resolveBuildNamespace } from "../shared/namespace.js";
+import { shouldUseRedis } from "../shared/build-phase.js";
+import type {
+  CacheComponentsEntry,
+  CacheHandlerOptions,
+  Logger,
+  MetricEmitter,
+  RedisClientLike,
+} from "../types.js";
+
+import {
+  bufferToStream,
+  decodeEnvelope,
+  encodeEnvelope,
+  readStreamFully,
+} from "./serialize.js";
+import { partitionEntry, shouldServeStale } from "./swr.js";
+
+// ─── Defaults / constants ────────────────────────────────────────────────────
+
+const DEFAULT_KEY_PREFIX = "next-cache:";
+const ENTRY_SUFFIX = "entry:";
+const TAG_SUFFIX = "tag:";
+const TAG_EXP_SUFFIX = "tag-expiration:";
+
+const DEFAULT_ABORT_MS = 1500;
+/** When entry.expire === Infinity (the "never" sentinel), use this as the
+ *  Redis EX. One year matches the upstream cap and avoids leaking forever. */
+const ONE_YEAR_SEC = 60 * 60 * 24 * 365;
+/** Fallback floor when both expire and revalidate are unset/0. */
+const FALLBACK_TTL_SEC = 3600;
+/** TTL for tag-expiration markers — kept long so cross-deployment readers
+ *  can still observe an invalidation that happened in the previous deploy. */
+const TAG_EXP_MARKER_TTL_SEC = 60 * 60 * 24 * 7; // 7 days
+
+// ─── Public factory contract ─────────────────────────────────────────────────
+
+export interface CacheComponentsHandler {
+  get(
+    cacheKey: string,
+    softTags: string[]
+  ): Promise<CacheComponentsEntry | undefined>;
+  set(
+    cacheKey: string,
+    pendingEntry: Promise<CacheComponentsEntry>
+  ): Promise<void>;
+  refreshTags(): Promise<void>;
+  getExpiration(tags: string[]): Promise<number>;
+  updateTags(
+    tags: string[],
+    durations?: { expire?: number }
+  ): Promise<void>;
+}
+
+// ─── Implementation ──────────────────────────────────────────────────────────
+
+interface HandlerState {
+  opts: Required<
+    Pick<
+      CacheHandlerOptions,
+      | "abortTimeoutMs"
+      | "fallback"
+      | "staleWhileRevalidate"
+      | "hashTag"
+      | "keyPrefix"
+    >
+  > & { rest: CacheHandlerOptions };
+  logger: Logger;
+  emit: MetricEmitter;
+  conn: ConnectionManager;
+  /** Memory cache for entries when Redis is unavailable. */
+  memEntries: MemoryStore<string>;
+  /** Memory tag-set index for memory fallback path. */
+  memTags: MemorySetStore;
+  /** Memory tag-expiration timestamps. Mirrors next-cache:tag-expiration:*. */
+  memTagExp: Map<string, number>;
+  /** Local mirror of recent tag invalidations refreshed from Redis. */
+  localTagTimestamps: Map<string, number>;
+  /** Resolved build namespace, computed once per call. */
+  resolveNs: () => string;
+}
+
+function gateRedis(state: HandlerState): boolean {
+  const fb = state.opts.fallback;
+  const ibp = state.opts.rest.isBuildPhase;
+  return ibp ? shouldUseRedis({ fallback: fb, isBuildPhase: ibp }) : shouldUseRedis({ fallback: fb });
+}
+
+function init(opts: CacheHandlerOptions): HandlerState {
+  const logger = opts.logger ?? defaultLogger;
+  const emit = createEmitter(opts.onMetric);
+  const conn = new ConnectionManager(opts.client, (err) => {
+    logger.warn("Redis client error", { message: err.message });
+    emit({ type: "redis.connect.failed", meta: { message: err.message } });
+  });
+
+  return {
+    opts: {
+      abortTimeoutMs: opts.abortTimeoutMs ?? DEFAULT_ABORT_MS,
+      fallback: opts.fallback ?? "auto",
+      staleWhileRevalidate: opts.staleWhileRevalidate ?? true,
+      hashTag: opts.hashTag ?? false,
+      keyPrefix: opts.keyPrefix ?? DEFAULT_KEY_PREFIX,
+      rest: opts,
+    },
+    logger,
+    emit,
+    conn,
+    memEntries: new MemoryStore<string>(),
+    memTags: new MemorySetStore(),
+    memTagExp: new Map(),
+    localTagTimestamps: new Map(),
+    resolveNs: () => resolveBuildNamespace(opts.buildNamespace),
+  };
+}
+
+// ─── Key helpers ─────────────────────────────────────────────────────────────
+
+function entryKey(state: HandlerState, cacheKey: string): string {
+  return buildKey(
+    `${state.opts.keyPrefix}${ENTRY_SUFFIX}`,
+    state.resolveNs(),
+    cacheKey,
+    state.opts.hashTag
+  );
+}
+
+function tagKey(state: HandlerState, tag: string): string {
+  return buildKey(
+    `${state.opts.keyPrefix}${TAG_SUFFIX}`,
+    state.resolveNs(),
+    tag,
+    state.opts.hashTag
+  );
+}
+
+function tagExpKey(state: HandlerState, tag: string): string {
+  return buildKey(
+    `${state.opts.keyPrefix}${TAG_EXP_SUFFIX}`,
+    state.resolveNs(),
+    tag,
+    state.opts.hashTag
+  );
+}
+
+// ─── TTL resolution ──────────────────────────────────────────────────────────
+
+function resolveTtlSeconds(entry: CacheComponentsEntry): number {
+  // Per spec §4 cacheLife: expire can be Infinity; map to ONE_YEAR_SEC.
+  if (Number.isFinite(entry.expire) && entry.expire > 0) {
+    return Math.max(60, Math.ceil(entry.expire));
+  }
+  if (Number.isFinite(entry.revalidate) && entry.revalidate > 0) {
+    return Math.max(60, Math.ceil(entry.revalidate));
+  }
+  if (entry.expire === Number.POSITIVE_INFINITY) {
+    return ONE_YEAR_SEC;
+  }
+  return FALLBACK_TTL_SEC;
+}
+
+// ─── get() ───────────────────────────────────────────────────────────────────
+
+async function getImpl(
+  state: HandlerState,
+  cacheKey: string,
+  softTags: string[]
+): Promise<CacheComponentsEntry | undefined> {
+  const start = Date.now();
+  const useRedis = gateRedis(state);
+
+  if (!useRedis && state.opts.fallback === "never") {
+    state.emit({ type: "cache.miss", meta: { reason: "no-redis" } });
+    return undefined;
+  }
+
+  const eKey = entryKey(state, cacheKey);
+
+  // Try Redis first when allowed.
+  let envelope: ReturnType<typeof decodeEnvelope> = null;
+  let raw: string | null = null;
+
+  if (useRedis) {
+    try {
+      raw = await withAbortSignal(
+        "cacheHandlers.get",
+        state.opts.abortTimeoutMs,
+        async () => {
+          const client = await state.conn.getOrConnect();
+          if (!client) return null;
+          return await client.get(eKey);
+        }
+      );
+    } catch (err) {
+      if (err instanceof CacheTimeoutError) {
+        state.emit({ type: "redis.timeout", meta: { op: "get" } });
+      } else {
+        state.logger.warn("get() Redis error, falling back", {
+          message: (err as Error).message,
+        });
+      }
+      raw = null;
+    }
+  }
+
+  if (raw === null && state.opts.fallback !== "never") {
+    raw = state.memEntries.get(eKey);
+    if (raw !== null) state.emit({ type: "fallback.activated", meta: { op: "get" } });
+  }
+
+  if (raw === null) {
+    state.emit({ type: "cache.miss", ms: Date.now() - start });
+    return undefined;
+  }
+
+  envelope = decodeEnvelope(raw);
+  if (!envelope) {
+    state.emit({ type: "cache.miss", meta: { reason: "decode-error" } });
+    return undefined;
+  }
+
+  // 3-axis SWR partition.
+  const partition = partitionEntry(envelope, Date.now());
+  if (!shouldServeStale(partition, state.opts.staleWhileRevalidate)) {
+    // Hard miss. Best-effort cleanup of the entry.
+    if (useRedis) {
+      try {
+        await withAbortSignal(
+          "cacheHandlers.get.evict",
+          state.opts.abortTimeoutMs,
+          async () => {
+            const c = await state.conn.getOrConnect();
+            if (c) await c.del(eKey);
+          }
+        );
+      } catch {
+        // Ignore — eviction is best-effort.
+      }
+    } else {
+      state.memEntries.delete(eKey);
+    }
+    state.emit({
+      type: "cache.miss",
+      meta: { reason: "expired", freshness: partition.freshness },
+    });
+    return undefined;
+  }
+
+  // Soft-tag freshness check. Per spec §2.3#get, an entry is stale if any
+  // soft tag was invalidated after entry.timestamp.
+  if (softTags.length > 0) {
+    let mostRecent = 0;
+    for (const t of softTags) {
+      const ts = state.localTagTimestamps.get(t);
+      if (ts !== undefined && ts > mostRecent) mostRecent = ts;
+    }
+    if (mostRecent > envelope.timestamp) {
+      state.emit({
+        type: "cache.miss",
+        meta: { reason: "soft-tag-invalidated" },
+      });
+      return undefined;
+    }
+  }
+
+  state.emit({
+    type: partition.freshness === "stale" ? "cache.stale" : "cache.hit",
+    ms: Date.now() - start,
+    meta: { freshness: partition.freshness },
+  });
+
+  // Reconstruct stream and return.
+  return {
+    value: bufferToStream(Buffer.from(envelope.value, "base64")),
+    tags: envelope.tags,
+    stale: envelope.stale,
+    timestamp: envelope.timestamp,
+    expire: envelope.expire,
+    revalidate: envelope.revalidate,
+  };
+}
+
+// ─── set() ───────────────────────────────────────────────────────────────────
+
+async function setImpl(
+  state: HandlerState,
+  cacheKey: string,
+  pendingEntry: Promise<CacheComponentsEntry>
+): Promise<void> {
+  // Spec mandates awaiting the promise before reading value.
+  let entry: CacheComponentsEntry;
+  try {
+    entry = await pendingEntry;
+  } catch (err) {
+    state.logger.warn("pendingEntry rejected, skipping set()", {
+      message: (err as Error).message,
+    });
+    state.emit({ type: "cache.set.failed", meta: { reason: "pending-rejected" } });
+    return;
+  }
+
+  let buf: Buffer;
+  try {
+    buf = await readStreamFully(entry.value);
+  } catch (err) {
+    // Partial writes — discard per spec §2.3#set.
+    state.logger.warn("stream errored mid-read, discarding entry", {
+      message: (err as Error).message,
+    });
+    state.emit({ type: "cache.set.failed", meta: { reason: "partial-stream" } });
+    return;
+  }
+
+  const eKey = entryKey(state, cacheKey);
+  const ttl = resolveTtlSeconds(entry);
+  const payload = encodeEnvelope(buf, {
+    tags: entry.tags,
+    stale: entry.stale,
+    timestamp: entry.timestamp,
+    expire: entry.expire,
+    revalidate: entry.revalidate,
+  });
+
+  const useRedis = gateRedis(state);
+
+  if (!useRedis) {
+    state.emit({ type: "build_phase.skip", meta: { op: "set" } });
+    if (state.opts.fallback !== "never") {
+      state.memEntries.set(eKey, payload, ttl);
+      for (const t of entry.tags) {
+        state.memTags.sAdd(tagKey(state, t), eKey);
+        state.memTags.expire(tagKey(state, t), ttl);
+      }
+    }
+    state.emit({ type: "cache.set", meta: { backend: "memory" } });
+    return;
+  }
+
+  try {
+    await withAbortSignal(
+      "cacheHandlers.set",
+      state.opts.abortTimeoutMs,
+      async () => {
+        const client = await state.conn.getOrConnect();
+        if (!client) {
+          if (state.opts.fallback !== "never") {
+            state.memEntries.set(eKey, payload, ttl);
+          }
+          return;
+        }
+        if (entry.tags.length === 0) {
+          // No tags → simple SET.
+          await client.set(eKey, payload, { EX: ttl });
+        } else {
+          await luaSetWithTags(client, state, eKey, payload, ttl, entry.tags);
+        }
+      }
+    );
+    state.emit({ type: "cache.set", meta: { backend: "redis" } });
+  } catch (err) {
+    if (err instanceof CacheTimeoutError) {
+      state.emit({ type: "redis.timeout", meta: { op: "set" } });
+    } else {
+      state.logger.warn("set() failed (best-effort)", {
+        message: (err as Error).message,
+      });
+    }
+    state.emit({ type: "cache.set.failed", meta: { reason: "redis-error" } });
+    // No re-throw per spec error policy.
+  }
+}
+
+async function luaSetWithTags(
+  client: RedisClientLike,
+  state: HandlerState,
+  eKey: string,
+  payload: string,
+  ttl: number,
+  tags: string[]
+): Promise<void> {
+  const tagKeys = tags.map((t) => tagKey(state, t));
+  await execLuaScript<number>(
+    client,
+    "setWithTags",
+    [eKey, ...tagKeys],
+    [payload, String(ttl), String(ttl), String(tags.length)]
+  );
+}
+
+// ─── refreshTags() ───────────────────────────────────────────────────────────
+
+async function refreshTagsImpl(state: HandlerState): Promise<void> {
+  // Per spec §6: errors here MUST be caught.
+  if (
+    !gateRedis(state)
+  ) {
+    return;
+  }
+
+  try {
+    await withAbortSignal(
+      "cacheHandlers.refreshTags",
+      state.opts.abortTimeoutMs,
+      async () => {
+        const client = await state.conn.getOrConnect();
+        if (!client) return;
+        // Pull all tag-expiration markers under the current namespace.
+        const pattern = `${state.opts.keyPrefix}${TAG_EXP_SUFFIX}*`;
+        const seen: string[] = [];
+        for await (const chunk of client.scanIterator({
+          MATCH: pattern,
+          COUNT: 100,
+        })) {
+          const keys = Array.isArray(chunk)
+            ? chunk.map(String)
+            : [String(chunk)];
+          seen.push(...keys);
+          if (seen.length >= 500) break; // Bound work per request.
+        }
+        if (seen.length === 0) return;
+        const values = await client.mGet(seen);
+        for (let i = 0; i < seen.length; i += 1) {
+          const v = values[i];
+          if (!v) continue;
+          const ts = Number.parseInt(v, 10);
+          if (!Number.isFinite(ts)) continue;
+          // Strip prefix back to bare tag name.
+          const key = seen[i];
+          if (key === undefined) continue;
+          const tag = stripExpPrefix(state, key);
+          if (tag) state.localTagTimestamps.set(tag, ts);
+        }
+      }
+    );
+  } catch (err) {
+    state.logger.warn("refreshTags() error swallowed", {
+      message: (err as Error).message,
+    });
+  }
+}
+
+function stripExpPrefix(state: HandlerState, fullKey: string): string | null {
+  const ns = state.resolveNs();
+  const prefix = state.opts.hashTag
+    ? `${state.opts.keyPrefix}${TAG_EXP_SUFFIX}{${ns}}:`
+    : `${state.opts.keyPrefix}${TAG_EXP_SUFFIX}${ns}:`;
+  return fullKey.startsWith(prefix) ? fullKey.slice(prefix.length) : null;
+}
+
+// ─── getExpiration() ────────────────────────────────────────────────────────
+
+async function getExpirationImpl(
+  state: HandlerState,
+  tags: string[]
+): Promise<number> {
+  if (tags.length === 0) return 0;
+
+  let max = 0;
+  for (const t of tags) {
+    const local = state.localTagTimestamps.get(t);
+    if (local !== undefined && local > max) max = local;
+    const mem = state.memTagExp.get(t);
+    if (mem !== undefined && mem > max) max = mem;
+  }
+  if (max > 0) {
+    state.emit({ type: "tag.expiration.read", meta: { source: "local", count: tags.length } });
+    return max;
+  }
+
+  // Cold path: no local hits → consult Redis if reachable.
+  if (
+    !gateRedis(state)
+  ) {
+    return 0;
+  }
+
+  try {
+    return await withAbortSignal(
+      "cacheHandlers.getExpiration",
+      state.opts.abortTimeoutMs,
+      async () => {
+        const client = await state.conn.getOrConnect();
+        if (!client) return 0;
+        const keys = tags.map((t) => tagExpKey(state, t));
+        const values = await client.mGet(keys);
+        let m = 0;
+        for (const v of values) {
+          if (!v) continue;
+          const n = Number.parseInt(v, 10);
+          if (Number.isFinite(n) && n > m) m = n;
+        }
+        return m;
+      }
+    );
+  } catch {
+    // Best-effort. Falling back to 0 is safe (treats tags as never invalidated).
+    return 0;
+  }
+}
+
+// ─── updateTags() ───────────────────────────────────────────────────────────
+
+async function updateTagsImpl(
+  state: HandlerState,
+  tags: string[],
+  durations?: { expire?: number }
+): Promise<void> {
+  if (tags.length === 0) return;
+  const isHardExpire = durations?.expire === 0;
+  const now = Date.now();
+
+  // Local mirror update first — guarantees read-after-write within instance.
+  for (const t of tags) {
+    state.localTagTimestamps.set(t, now);
+    state.memTagExp.set(t, now);
+  }
+
+  if (
+    !gateRedis(state)
+  ) {
+    if (isHardExpire) {
+      // Drop matching entries from memory.
+      for (const t of tags) {
+        const tk = tagKey(state, t);
+        const members = state.memTags.sMembers(tk);
+        for (const m of members) state.memEntries.delete(m);
+        state.memTags.delete(tk);
+      }
+    }
+    state.emit({
+      type: isHardExpire ? "tag.invalidate.hard" : "tag.invalidate.soft",
+      meta: { count: tags.length, backend: "memory" },
+    });
+    return;
+  }
+
+  // Soft path: best-effort. Hard path: propagate failure.
+  try {
+    await withAbortSignal(
+      "cacheHandlers.updateTags",
+      state.opts.abortTimeoutMs,
+      async () => {
+        const client = await state.conn.getOrConnect();
+        if (!client) {
+          if (isHardExpire) {
+            throw new Error(
+              "[next-cache] hard updateTags requested but Redis unavailable"
+            );
+          }
+          return;
+        }
+        for (const t of tags) {
+          if (isHardExpire) {
+            await execLuaScript<number>(
+              client,
+              "revalidateHard",
+              [tagKey(state, t), tagExpKey(state, t)],
+              [String(now), String(TAG_EXP_MARKER_TTL_SEC)]
+            );
+          } else {
+            await client.set(tagExpKey(state, t), String(now), {
+              EX: TAG_EXP_MARKER_TTL_SEC,
+            });
+          }
+        }
+      }
+    );
+    state.emit({
+      type: isHardExpire ? "tag.invalidate.hard" : "tag.invalidate.soft",
+      meta: { count: tags.length, backend: "redis" },
+    });
+  } catch (err) {
+    if (err instanceof CacheTimeoutError) {
+      state.emit({ type: "redis.timeout", meta: { op: "updateTags" } });
+    }
+    if (isHardExpire) {
+      // Hard failures must surface — read-your-own-writes was requested.
+      throw err;
+    }
+    state.logger.warn("updateTags() soft path failed (best-effort)", {
+      message: (err as Error).message,
+    });
+  }
+}
+
+// ─── Public factory ─────────────────────────────────────────────────────────
+
+export function createCacheComponentsHandler(
+  opts: CacheHandlerOptions
+): CacheComponentsHandler {
+  const state = init(opts);
+  return {
+    get: (cacheKey, softTags) => getImpl(state, cacheKey, softTags),
+    set: (cacheKey, pendingEntry) => setImpl(state, cacheKey, pendingEntry),
+    refreshTags: () => refreshTagsImpl(state),
+    getExpiration: (tags) => getExpirationImpl(state, tags),
+    updateTags: (tags, durations) => updateTagsImpl(state, tags, durations),
+  };
+}
