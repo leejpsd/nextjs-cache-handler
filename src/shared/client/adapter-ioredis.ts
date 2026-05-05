@@ -119,7 +119,7 @@ export function adaptCluster(cluster: Cluster): RedisClientLike {
 export function createIoredisClient(
   config: Extract<RedisClientConfig, { type: "ioredis" }>
 ): Redis {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
+   
   const IORedis = require("ioredis") as typeof import("ioredis");
   // ioredis exports the class as both `default` and a named property.
   // Hitting the default works for both ESM and CJS consumers.
@@ -136,7 +136,7 @@ export function createIoredisClient(
 export function createIoredisCluster(
   config: Extract<RedisClientConfig, { type: "cluster" }>
 ): Cluster {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
+   
   const IORedis = require("ioredis") as typeof import("ioredis");
   const ClusterCtor =
     IORedis.Cluster ??
