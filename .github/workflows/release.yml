@@ -1,8 +1,15 @@
 name: Release
 
+# Disabled until v0.2 — the changesets-driven flow is not yet wired up to
+# the published v0.1.0-rc.1 baseline. v0.1 was published manually from a
+# local machine; v0.2+ will switch to changeset PRs (re-enable then).
+#
+# To re-enable: change `on:` from `workflow_dispatch:` back to
+#   on:
+#     push:
+#       branches: [main]
 on:
-  push:
-    branches: [main]
+  workflow_dispatch:
 
 jobs:
   release:
@@ -28,6 +35,7 @@ jobs:
       - run: npm ci --no-audit --no-fund
 
       # Verify before any publish path runs.
+      - run: npm run lint
       - run: npm run typecheck
       - run: npm run test:unit
       - run: npm run build
