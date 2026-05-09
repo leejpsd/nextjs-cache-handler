@@ -46,6 +46,10 @@ jobs:
         image: redis:7-alpine
         ports:
           - 6390:6379
+        # Healthcheck runs INSIDE the redis container (where redis-cli
+        # exists), and GitHub Actions blocks the job until the service
+        # is reported healthy. So by the time `steps:` start running,
+        # Redis is already up — no separate wait step needed.
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 1s
@@ -59,16 +63,19 @@ jobs:
           node-version: 22.x
           cache: npm
       - run: npm ci --no-audit --no-fund
-      - name: Wait for Redis
+      # Belt-and-suspenders TCP probe with `nc`, which is preinstalled on
+      # every ubuntu-latest runner (unlike `redis-cli`). Almost always a
+      # no-op because the service health gate already passed.
+      - name: Verify Redis port is reachable
         run: |
           for i in {1..20}; do
-            if redis-cli -h 127.0.0.1 -p 6390 ping >/dev/null 2>&1; then
-              echo "Redis is up"
+            if nc -z 127.0.0.1 6390; then
+              echo "Redis port 6390 reachable"
               exit 0
             fi
             sleep 1
           done
-          echo "Redis didn't come up in time" >&2
+          echo "Redis port 6390 never came up" >&2
           exit 1
       - name: Run integration tests
         env:
