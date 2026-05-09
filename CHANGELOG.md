@@ -6,6 +6,32 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-05-10
+
+Documentation-only patch released alongside the first round of external
+write-ups. No code changes.
+
+### Changed
+
+- **Compatibility matrix** now carries an explicit verification date and a
+  `nextjs-turbo-redis-cache` column, so readers can spot-check the comparison
+  against the upstream READMEs as both packages evolve. The previous
+  two-column shape didn't make it obvious which competitors are tracked.
+- **Production checklist** gains an explicit Redis Cluster row: cluster
+  deployments must set `hashTag: true` to avoid `CROSSSLOT` errors from
+  the multi-key Lua scripts. Also notes that cluster support is
+  unit-tested but not yet load-tested at scale.
+- **Compatibility table for Redis-protocol services** (ElastiCache,
+  Upstash, DragonflyDB, KeyDB, Vercel KV) added to the production
+  section, separating "validated" from "expected to work via the
+  standard Redis protocol".
+- **`docs/architecture.md`** now documents two memory-fallback caveats
+  that previously required reading the source: per-process isolation
+  (cross-instance correctness degrades during Redis outages) and the
+  32-bit `setTimeout` clamp (TTLs above ≈24.85 days fire the eviction
+  timer early, though `get()`'s lazy `expiresAt` check still honors the
+  configured expiration).
+
 ## [0.1.0] - 2026-05-10
 
 First stable release. Promoted from `0.1.0-rc.1` after a 24-hour live-traffic

@@ -130,6 +130,31 @@ two safeguards:
 
 The `expiresAt` check in `get()` handles entries whose timer was clamped.
 
+### Caveats and limits of the memory fallback
+
+The memory fallback is a graceful-degradation path, not a primary cache
+backend. Two specific behaviors that surprise people:
+
+1. **Per-process, not per-app.** Each Next.js process has its own
+   `MemoryStore` instance. Two ECS tasks running the same image have
+   independent fallback caches. When Redis is unreachable, you lose
+   cross-instance consistency for the duration of the outage. This is
+   the right trade-off (availability over correctness), but it does mean
+   that during a Redis outage two users can see different content.
+
+2. **TTLs longer than ~24.85 days are clamped at the timer level.**
+   Node's `setTimeout` accepts a 32-bit signed millisecond value, so any
+   TTL beyond `2^31-1 ms` (≈ 24.85 days) gets capped when the eviction
+   timer is scheduled. The `expiresAt` field stored in the entry remains
+   accurate (e.g. one year), and the lazy check inside `get()` always
+   honors it — but if a 1-year entry is read after 25 days, the timer
+   has already fired and removed it. This only matters when you both
+   (a) configure `cacheLife({expire: Infinity})` (which we map to one
+   year), AND (b) operate without Redis for more than 24 days, which is
+   not a realistic scenario. The behavior is documented here so future
+   readers don't have to dig through `src/shared/memory-fallback.ts` to
+   understand the clamp constant.
+
 ## Why we don't ship a stampede / single-flight lock yet
 
 `v0.1` does not implement Lua single-flight locking around stale →

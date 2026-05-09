@@ -49,21 +49,29 @@ As of 2026-05, the leading OSS Redis handler `@fortedigital/nextjs-cache-handler
 declares `peerDependencies.next: ">=16.1.5"` but the README marks the new
 plural interface as ❌ **"Not yet supported - Help needed"**:
 
-| Next 16 feature | @fortedigital | this |
-|---|---|---|
-| `cacheHandlers` config (plural) | ❌ Help needed | ✅ |
-| `'use cache'` directive | ❌ Help needed | ✅ |
-| `'use cache: remote'` | ❌ Help needed | ✅ |
-| `'use cache: private'` | n/a (uncustomizable) | n/a |
-| `cacheComponents: true` | ❌ Help needed | ✅ |
-| Build-phase skip (`PHASE_PRODUCTION_BUILD`) | ✅ | ✅ |
-| Auto deploy isolation (`BUILD_NAMESPACE`) | manual | ✅ auto |
-| Lua-atomic SET+tag | partial (MULTI) | ✅ |
-| AbortSignal timeout | ✅ | ✅ |
-| Redis Cluster | ✅ | ✅ |
-| ioredis support | ✅ | ✅ |
-| In-memory fallback (TTL-aware) | partial | ✅ |
-| OpenTelemetry hook | ❌ | ✅ (`onMetric`) |
+> 📅 **Compatibility matrix verified 2026-05-10.** The OSS Next.js cache
+> handler ecosystem moves quickly — please verify
+> [`@fortedigital`](https://github.com/fortedigital/nextjs-cache-handler#compatibility)
+> and
+> [`nextjs-turbo-redis-cache`](https://github.com/trieb-work/nextjs-turbo-redis-cache#features)
+> directly before relying on this comparison.
+
+| Next 16 feature | this | @fortedigital 3.2.0 | nextjs-turbo-redis-cache 1.13 |
+|---|---|---|---|
+| `cacheHandlers` config (plural) | ✅ | ❌ Help needed | ✅ since 1.11 |
+| `'use cache'` directive | ✅ | ❌ Help needed | ✅ since 1.11 |
+| `'use cache: remote'` | ✅ | ❌ Help needed | partial |
+| `'use cache: private'` | n/a (uncustomizable) | n/a | n/a |
+| `cacheComponents: true` | ✅ | ❌ Help needed | ✅ |
+| Build-phase skip (`PHASE_PRODUCTION_BUILD`) | ✅ | ✅ (singular only) | ✅ |
+| Auto deploy isolation | ✅ `BUILD_NAMESPACE` env-resolved | manual | ✅ `BUILD_ID` since 1.13 |
+| Lua-atomic SET+tag | ✅ Lua scripts | partial (MULTI) | partial |
+| AbortSignal timeout | ✅ per-op | ✅ Proxy-wrapped | ❌ |
+| Redis Cluster | ✅ (cluster adapter, see Production checklist) | ✅ | ✅ |
+| ioredis support | ✅ | ✅ | ✅ |
+| In-memory fallback (TTL-aware) | ✅ | partial | ✅ L1 + Redis L2 |
+| OpenTelemetry hook | ✅ `onMetric` | ❌ | ❌ |
+| Live-traffic dogfood (24h+) | ✅ AWS ECS Fargate | not published | not published |
 
 PR [#207](https://github.com/fortedigital/nextjs-cache-handler/pull/207) on
 `@fortedigital` has been stalled for 3+ months on the same issue: the
@@ -196,6 +204,13 @@ Full reference: [`docs/api.md`](./docs/api.md) (auto-generated).
       to avoid static-chunk-404 issues during a deploy.
 - [ ] **`abortTimeoutMs: 1500`** (default) — protects against a stuck Redis
       connection from hanging the request thread.
+- [ ] **Redis Cluster: set `hashTag: true`** — multi-key Lua scripts
+      (`set-with-tags.lua`, `revalidate-hard.lua`) require all KEYS to land
+      on the same hash slot. Without `hashTag`, cluster deployments will hit
+      `CROSSSLOT Keys in request don't hash to the same slot`. The flag wraps
+      the namespace in `{}` so every key for a given deploy hashes together.
+      Cluster support is implemented but **not yet load-tested at production
+      scale**; PRs welcome.
 - [ ] **Redis `maxmemory-policy: allkeys-lru` or `noeviction`** — if you need
       bounded memory, choose `allkeys-lru`. Otherwise `noeviction` keeps
       tag indices intact.
@@ -204,6 +219,17 @@ Full reference: [`docs/api.md`](./docs/api.md) (auto-generated).
 - [ ] **Health check** — call your own `/api/health` that pings Redis
       (separate from the handler) so a Redis outage surfaces in your
       monitoring without inducing 5xx in user requests.
+
+### Compatibility with Redis-protocol services
+
+| Service | How to use | Tested? |
+|---|---|---|
+| **Self-hosted Redis 7+** | `{ type: "redis", url }` or `{ type: "ioredis", url }` | ✅ AWS ElastiCache 24h soak |
+| **Redis Cluster** | `{ type: "cluster", nodes }` + `hashTag: true` | unit-tested, not yet load-tested at scale |
+| **Upstash Redis** | `{ type: "redis", url: "rediss://..." }` (TLS auto-detected) | not yet validated, expected to work via the standard Redis protocol |
+| **AWS ElastiCache (replication group)** | `{ type: "redis", url: "rediss://..." }` | ✅ reference deployment |
+| **Vercel KV** | not yet supported — `@vercel/kv` adapter ships in v0.3 | — |
+| **DragonflyDB / KeyDB** | Redis-protocol compatible — `{ type: "redis", url }` should work | not validated |
 
 ---
 
