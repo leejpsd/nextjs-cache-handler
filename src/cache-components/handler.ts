@@ -44,8 +44,10 @@ const DEFAULT_KEY_PREFIX = "next-cache:";
 const ENTRY_SUFFIX = "entry:";
 const TAG_SUFFIX = "tag:";
 const TAG_EXP_SUFFIX = "tag-expiration:";
+const LOCK_SUFFIX = "lock:";
 
 const DEFAULT_ABORT_MS = 1500;
+const DEFAULT_LOCK_TTL_SEC = 10;
 /** When entry.expire === Infinity (the "never" sentinel), use this as the
  *  Redis EX. One year matches the upstream cap and avoids leaking forever. */
 const ONE_YEAR_SEC = 60 * 60 * 24 * 365;
@@ -85,8 +87,13 @@ interface HandlerState {
       | "staleWhileRevalidate"
       | "hashTag"
       | "keyPrefix"
+      | "singleFlight"
+      | "singleFlightLockTtlSec"
     >
   > & { rest: CacheHandlerOptions };
+  /** Stable instance identifier baked into refresh-lock owner field. Helps
+   *  operators tell from Redis which task held a given lock. */
+  instanceId: string;
   logger: Logger;
   emit: MetricEmitter;
   conn: ConnectionManager;
@@ -123,6 +130,9 @@ function init(opts: CacheHandlerOptions): HandlerState {
       staleWhileRevalidate: opts.staleWhileRevalidate ?? true,
       hashTag: opts.hashTag ?? false,
       keyPrefix: opts.keyPrefix ?? DEFAULT_KEY_PREFIX,
+      singleFlight: opts.singleFlight ?? false,
+      singleFlightLockTtlSec:
+        opts.singleFlightLockTtlSec ?? DEFAULT_LOCK_TTL_SEC,
       rest: opts,
     },
     logger,
@@ -133,6 +143,10 @@ function init(opts: CacheHandlerOptions): HandlerState {
     memTagExp: new Map(),
     localTagTimestamps: new Map(),
     resolveNs: () => resolveBuildNamespace(opts.buildNamespace),
+    instanceId:
+      process.env.HOSTNAME ||
+      process.env.ECS_TASK_ID ||
+      `pid-${process.pid}`,
   };
 }
 
@@ -163,6 +177,57 @@ function tagExpKey(state: HandlerState, tag: string): string {
     tag,
     state.opts.hashTag
   );
+}
+
+function lockKey(state: HandlerState, cacheKey: string): string {
+  return buildKey(
+    `${state.opts.keyPrefix}${LOCK_SUFFIX}`,
+    state.resolveNs(),
+    cacheKey,
+    state.opts.hashTag
+  );
+}
+
+/**
+ * Try to acquire the single-flight lock for a stale cache key. Returns true
+ * if this instance is the refresh leader, false if someone else already
+ * holds the lock or Redis is unavailable.
+ *
+ * On any error path we return `false` (the safe default — we'd rather miss
+ * the leadership signal than block the user response). The lock is purely
+ * an observability + stampede-suppression hint; the entry itself is still
+ * returned regardless of outcome.
+ */
+async function tryAcquireRefreshLock(
+  state: HandlerState,
+  cacheKey: string
+): Promise<boolean> {
+  if (!state.opts.singleFlight) return false;
+  if (!gateRedis(state)) return false;
+
+  try {
+    return await withAbortSignal(
+      "cacheHandlers.singleFlight.lock",
+      state.opts.abortTimeoutMs,
+      async () => {
+        const client = await state.conn.getOrConnect();
+        if (!client) return false;
+        const result = await execLuaScript<number>(
+          client,
+          "refreshTagLock",
+          [lockKey(state, cacheKey)],
+          [
+            state.instanceId,
+            String(state.opts.singleFlightLockTtlSec),
+          ]
+        );
+        return result === 1;
+      }
+    );
+  } catch {
+    // Best-effort. A failed lock attempt should never block a serve.
+    return false;
+  }
 }
 
 // ─── TTL resolution ──────────────────────────────────────────────────────────
@@ -285,11 +350,33 @@ async function getImpl(
     }
   }
 
-  state.emit({
-    type: partition.freshness === "stale" ? "cache.stale" : "cache.hit",
-    ms: Date.now() - start,
-    meta: { freshness: partition.freshness },
-  });
+  // For stale entries, try the single-flight refresh lock so only one
+  // instance triggers the background refresh (when the option is on).
+  // The lock outcome is purely informational — we always serve the entry.
+  if (partition.freshness === "stale") {
+    if (state.opts.singleFlight) {
+      const isLeader = await tryAcquireRefreshLock(state, cacheKey);
+      state.emit({
+        type: isLeader
+          ? "cache.stale.refresh.leader"
+          : "cache.stale.refresh.follower",
+        ms: Date.now() - start,
+        meta: { freshness: partition.freshness },
+      });
+    } else {
+      state.emit({
+        type: "cache.stale",
+        ms: Date.now() - start,
+        meta: { freshness: partition.freshness },
+      });
+    }
+  } else {
+    state.emit({
+      type: "cache.hit",
+      ms: Date.now() - start,
+      meta: { freshness: partition.freshness },
+    });
+  }
 
   // Reconstruct stream and return.
   return {

@@ -1,6 +1,6 @@
 {
   "name": "@leejpsd/nextjs-cache-handler",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "The only Redis cache handler for Next.js 16 that ships both cacheHandler (ISR) and cacheHandlers ('use cache') — production-validated for multi-instance deployments where @fortedigital lists 'Help needed'.",
   "keywords": [
     "next",
@@ -127,7 +127,9 @@
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
     "test": "vitest run",
     "test:unit": "vitest run tests/unit",
-    "test:integration": "vitest run tests/integration",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:integration:up": "docker compose -f docker-compose.test.yml up -d --wait",
+    "test:integration:down": "docker compose -f docker-compose.test.yml down",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "format": "prettier --write \"src/**/*.{ts,tsx}\" \"tests/**/*.{ts,tsx}\"",

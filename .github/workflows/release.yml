@@ -1,15 +1,15 @@
 name: Release
 
-# Disabled until v0.2 — the changesets-driven flow is not yet wired up to
-# the published v0.1.0-rc.1 baseline. v0.1 was published manually from a
-# local machine; v0.2+ will switch to changeset PRs (re-enable then).
-#
-# To re-enable: change `on:` from `workflow_dispatch:` back to
-#   on:
-#     push:
-#       branches: [main]
+# Two trigger modes:
+#   workflow_dispatch — manually launch a release run (recommended for
+#                       the first GHA-driven publish so we can watch logs)
+#   push:branches:main — once stable, every changeset merged into main
+#                        publishes automatically (uncomment the block
+#                        below to enable)
 on:
   workflow_dispatch:
+  # push:
+  #   branches: [main]
 
 jobs:
   release:
@@ -18,7 +18,7 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: write
-      id-token: write    # required for npm provenance
+      id-token: write    # required for npm provenance attestation
       pull-requests: write
     steps:
       - uses: actions/checkout@v4
@@ -34,7 +34,7 @@ jobs:
 
       - run: npm ci --no-audit --no-fund
 
-      # Verify before any publish path runs.
+      # Verify gates — same set the local pre-publish hook runs.
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run test:unit
@@ -42,11 +42,31 @@ jobs:
       - run: npx publint
       - run: npx attw --pack .
 
+      # Integration tests for the release workflow run against an
+      # ephemeral Redis 7 service container — not strictly required for a
+      # patch release, but cheap insurance.
+      - name: Spin up Redis for release-time integration check
+        run: |
+          docker run -d --name release-redis -p 6390:6379 redis:7-alpine
+          for i in {1..20}; do
+            if docker exec release-redis redis-cli ping >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
+      - name: Integration tests
+        env:
+          INTEGRATION_REDIS_URL: redis://127.0.0.1:6390
+        run: npm run test:integration
+
       - name: Create Release Pull Request or Publish to npm
         uses: changesets/action@v1
         with:
+          # publish: gets called when there are no changesets left to apply.
+          #          Run the build first so dist/ is populated.
           publish: npm run publish:changesets
+          # version:  consumes pending changesets and updates package.json,
+          #          CHANGELOG, and creates a "Version Packages" PR.
           version: npm run version:changesets
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_PROVENANCE: "true"

@@ -81,6 +81,9 @@ export type MetricEventType =
   | "cache.hit"
   | "cache.miss"
   | "cache.stale"
+  | "cache.stale.refresh.leader"
+  | "cache.stale.refresh.follower"
+  | "cache.stale.refresh.skipped"
   | "cache.set"
   | "cache.set.failed"
   | "tag.invalidate.soft"
@@ -168,6 +171,30 @@ export interface CacheHandlerOptions {
    * Default: `true`. Set to `false` to revert to "expire on revalidate" behavior.
    */
   staleWhileRevalidate?: boolean;
+
+  /**
+   * Single-flight refresh lock for the SWR boundary.
+   *
+   * When enabled, only one handler instance per cache key attempts a
+   * background refresh during the stale window. Other instances continue
+   * serving the same stale entry until the leader publishes a fresh one or
+   * the lock TTL expires. Prevents N parallel refreshes (cache stampede)
+   * when many instances cross the `revalidate` boundary at the same time.
+   *
+   * Default: `false`. The marginal benefit at small scale is small because
+   * Next.js already serializes per-cacheKey refresh per process; turn this
+   * on when you have many instances and observe duplicate origin work
+   * around the revalidate boundary.
+   */
+  singleFlight?: boolean;
+
+  /**
+   * Lock TTL in seconds for `singleFlight` mode. Default: 10.
+   *
+   * Long enough that a normal refresh can complete (most are sub-second),
+   * short enough that a crashed leader doesn't block followers for long.
+   */
+  singleFlightLockTtlSec?: number;
 
   /**
    * Override the build-phase detector. Default checks

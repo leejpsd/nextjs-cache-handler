@@ -1,0 +1,21 @@
+# Local + CI integration test fixture.
+#
+# Brings up a single-node Redis 7 with default settings — same topology
+# class as the reference deployment's ElastiCache. Cluster mode is on the
+# v0.3 roadmap.
+#
+# Usage:
+#   docker compose -f docker-compose.test.yml up -d
+#   npm run test:integration
+#   docker compose -f docker-compose.test.yml down
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: leejpsd-nextjs-cache-handler-test-redis
+    ports:
+      - "6390:6379" # 6390 to avoid clashing with any local 6379
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 1s
+      timeout: 2s
+      retries: 10

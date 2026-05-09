@@ -6,6 +6,64 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-05-10
+
+First minor bump. Three differentiators land in this release.
+
+### Added
+
+- **Single-flight refresh lock** (`singleFlight: true`,
+  `singleFlightLockTtlSec: 10`). Opt-in stampede protection at the SWR
+  boundary. Uses the bundled `refresh-tag-lock.lua` script over a Redis
+  SETNX-style lock; only the leader's stale read triggers the
+  background refresh, all others fall through to the follower path.
+  Two new `MetricEvent` types (`cache.stale.refresh.leader`,
+  `cache.stale.refresh.follower`) appear in `onMetric` so operators can
+  verify leadership balance. Lock-acquisition failures are best-effort
+  and always degrade to the safe follower path; the stale entry is
+  served regardless.
+- **OpenTelemetry reference adapter** at
+  [`examples/opentelemetry/`](./examples/opentelemetry/). The library
+  itself stays dependency-free; the example shows the smallest viable
+  wiring of `onMetric` to OTel counters and histograms with bounded
+  cardinality (no cache keys or tag names emitted as attributes).
+- **Integration tests against real Redis 7** (21 scenarios) covering
+  both `redis@5` and `ioredis` adapters. Each adapter runs the same
+  test grid so a regression in either client library is pinpointed
+  immediately. New scripts: `npm run test:integration`,
+  `npm run test:integration:up` / `:down` for the docker-compose
+  fixture.
+- **CI integration job** runs the integration suite against an
+  ephemeral Redis 7 service container on every PR.
+- **GitHub Actions OIDC publish path** in `.github/workflows/release.yml`
+  with `id-token: write` and `NPM_CONFIG_PROVENANCE=true`. Currently
+  scoped to `workflow_dispatch` trigger so the first GHA-driven publish
+  can be observed; flip to `push: main` once the changesets cadence
+  stabilizes. Tarballs published from the workflow will land on npm
+  with verified provenance.
+
+### Changed
+
+- `MetricEventType` union grew three new entries:
+  `cache.stale.refresh.leader`, `cache.stale.refresh.follower`,
+  `cache.stale.refresh.skipped`. The legacy `cache.stale` event still
+  fires when `singleFlight` is off (default).
+- `HandlerState` now carries an `instanceId` (read from `HOSTNAME` /
+  `ECS_TASK_ID` / `pid-<pid>`) and embeds it in every refresh-lock
+  acquisition for operator-side observability.
+
+### Compatibility
+
+- No breaking changes. All existing 0.1.x configurations continue to
+  work; `singleFlight` defaults to `false`.
+
+### Verified
+
+- 72 unit tests (8 files) + 21 integration tests (1 file × 21 scenarios)
+  all green.
+- arethetypeswrong: 28/28 cells green.
+- publint: clean.
+
 ## [0.1.1] - 2026-05-10
 
 Documentation-only patch released alongside the first round of external

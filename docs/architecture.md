@@ -155,16 +155,56 @@ backend. Two specific behaviors that surprise people:
    readers don't have to dig through `src/shared/memory-fallback.ts` to
    understand the clamp constant.
 
-## Why we don't ship a stampede / single-flight lock yet
+## Single-flight refresh lock (v0.2+)
 
-`v0.1` does not implement Lua single-flight locking around stale →
-background-refresh. Reasons:
+Stale entries are served instantly while Next.js triggers the
+background refresh. With many instances all crossing the `revalidate`
+boundary at the same moment, each one runs its own refresh — N parallel
+re-renders for the same key.
 
-1. Next.js 16 already serializes per-cacheKey background refresh
-   internally on each instance. The marginal benefit at our target scale
-   is small.
-2. Adding a Redis lock introduces a partial-failure mode (lock acquired,
-   refresh crashed, lock TTL has to elapse before recovery) that needs
-   careful tuning.
-3. The Lua script `refresh-tag-lock.lua` is bundled and tested in this
-   release. The handler logic to consume it ships in **v0.2**.
+The opt-in `singleFlight: true` mode adds a Lua-atomic SETNX over a
+per-(namespace, cacheKey) lock with a configurable TTL (default 10
+seconds). Only the leader's stale read triggers the actual refresh:
+
+```
+get(cacheKey, softTags)
+  ├─ entry partition → "stale"
+  ├─ singleFlight enabled?
+  │    ├─ no  → emit "cache.stale", return entry
+  │    └─ yes → execLuaScript("refreshTagLock", [lockKey], [instanceId, ttlSec])
+  │              ├─ returned 1 → leader  → emit "cache.stale.refresh.leader"
+  │              ├─ returned 0 → follower → emit "cache.stale.refresh.follower"
+  │              └─ Redis error → safe default = follower
+  └─ return the (stale) entry either way
+```
+
+The Lua body (`src/shared/lua/refresh-tag-lock.lua`):
+
+```lua
+if redis.call('GET', KEYS[1]) then return 0 end
+redis.call('SET', KEYS[1], ARGV[1], 'EX', tonumber(ARGV[2]))
+return 1
+```
+
+Three deliberate constraints:
+
+1. **Best-effort, never blocks the user response.** Lock acquisition
+   failures (Redis timeout, NOSCRIPT race, network blip) all fall
+   through to the follower path. The stale entry is always returned.
+2. **Observability primitive, not a correctness primitive.** The
+   handler doesn't *prevent* a follower instance from refreshing — it
+   couldn't, since Next.js drives the refresh after the handler
+   returns. The lock surfaces "who should refresh" through metrics
+   (`cache.stale.refresh.{leader,follower}`) so operators can verify
+   leadership balance and tune fleet sizing.
+3. **TTL bounded.** A crashed leader doesn't block followers for long.
+   10 seconds is long enough for most refreshes (sub-second is
+   typical) and short enough that recovery is automatic.
+
+When not to enable: small fleets (1–2 instances) where Next's
+per-process refresh serialization already covers the stampede risk.
+Adding a Redis round-trip per stale read isn't free.
+
+The matching Lua loader (`src/shared/lua/index.ts`) handles the
+EVALSHA → NOSCRIPT → EVAL fallback so the cost is one packet on every
+call after the first.

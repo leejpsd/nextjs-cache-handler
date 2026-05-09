@@ -3,10 +3,15 @@
 [![npm](https://img.shields.io/npm/v/@leejpsd/nextjs-cache-handler.svg)](https://www.npmjs.com/package/@leejpsd/nextjs-cache-handler)
 [![license](https://img.shields.io/npm/l/@leejpsd/nextjs-cache-handler.svg)](./LICENSE)
 
-> **Stable `v0.1.0`** — install with
+> **`v0.2.0`** — install with
 > `npm install @leejpsd/nextjs-cache-handler`. Production-validated against
 > AWS ECS Fargate with multi-instance Redis (24h live-traffic soak: 0
 > errors, 0 leaks, 2ms Redis ping, namespace isolation working).
+>
+> v0.2 adds: optional **single-flight refresh lock** for cache-stampede
+> protection at the SWR boundary, a reference **OpenTelemetry** wrapper,
+> and **integration tests** (21 scenarios) running against real Redis 7
+> over both `redis@5` and `ioredis` adapters.
 
 The Redis cache handler for **Next.js 16** that ships **both** `cacheHandler`
 (ISR / Pages Router) **and** `cacheHandlers` (`'use cache'` directive,
@@ -171,13 +176,15 @@ export default async function Page() {
 ```ts
 interface CacheHandlerOptions {
   client: RedisClientFactory | RedisClientConfig;
-  keyPrefix?: string;            // default: "next-cache:" / "next-incremental:"
+  keyPrefix?: string;             // default: "next-cache:" / "next-incremental:"
   buildNamespace?: string | (() => string);  // default: env DEPLOYMENT_VERSION || GIT_HASH || "unversioned"
-  abortTimeoutMs?: number;       // default: 1500
+  abortTimeoutMs?: number;        // default: 1500
   fallback?: "auto" | "always" | "never";    // default: "auto"
   staleWhileRevalidate?: boolean; // default: true (cache-components only)
-  isBuildPhase?: () => boolean;  // override PHASE_PRODUCTION_BUILD detection
-  hashTag?: boolean;             // default: false (set true on Redis Cluster)
+  singleFlight?: boolean;         // default: false — see "Single-flight refresh lock" below
+  singleFlightLockTtlSec?: number; // default: 10
+  isBuildPhase?: () => boolean;   // override PHASE_PRODUCTION_BUILD detection
+  hashTag?: boolean;              // default: false (set true on Redis Cluster)
   onMetric?: (event: MetricEvent) => void;
   logger?: Logger;
 }
@@ -233,6 +240,75 @@ Full reference: [`docs/api.md`](./docs/api.md) (auto-generated).
 
 ---
 
+## Single-flight refresh lock (v0.2)
+
+The `cacheHandlers` (plural) interface returns stale entries inside the
+SWR window so users get an instant response while the background
+refresh completes. With many instances, the moment an entry crosses the
+`revalidate` boundary, every instance independently triggers its own
+refresh — N parallel re-renders for the same key, each hitting your
+origin once.
+
+`singleFlight: true` adds an opt-in Redis lock (`refresh-tag-lock.lua`,
+default TTL 10s) at the SWR boundary. The first instance to acquire it
+becomes the **leader** and runs the refresh; the rest become
+**followers**, keep serving the same stale entry, and wait for the
+leader's write to land. The lock is observability-only at the handler
+layer — Next.js still drives the actual refresh; we just suppress the
+stampede.
+
+```js
+createCacheComponentsHandler({
+  client: { type: "redis", url: process.env.REDIS_URL },
+  singleFlight: true,         // default false
+  singleFlightLockTtlSec: 10, // default 10
+});
+```
+
+Two new `MetricEvent` types appear on `onMetric`:
+
+| event type | meaning |
+|---|---|
+| `cache.stale.refresh.leader` | this instance just acquired the lock and is the designated refresher |
+| `cache.stale.refresh.follower` | another instance holds the lock; we serve stale and skip the refresh |
+
+If lock acquisition fails (Redis hiccup, TTL race), the handler
+defaults to the follower path — the stale entry is always served, never
+dropped. This is intentional: the lock is an optimization, not a
+correctness-critical primitive.
+
+When **not** to enable single-flight: small fleets (1–2 instances) where
+Next's per-process serialization already covers the stampede risk.
+Adding a Redis round-trip per stale read isn't free.
+
+See [`docs/architecture.md`](./docs/architecture.md#single-flight-refresh-lock-v02-)
+for the full state machine and a reference to the Lua script body.
+
+---
+
+## OpenTelemetry instrumentation (v0.2)
+
+The handler doesn't bundle `@opentelemetry/api` (zero runtime
+dependencies stays a goal). Instead, the `onMetric(event)` hook gives
+strictly-typed events you can pipe into whatever observability stack
+you already run.
+
+[`examples/opentelemetry/`](./examples/opentelemetry/) is a copy-paste
+reference wrapper that:
+
+- exposes a `nextjs_cache.events_total` counter dimensioned on
+  `type` / `freshness` / `backend` / `reason` / `op`
+- exposes a `nextjs_cache.op_latency_ms` histogram for events that
+  carry an `ms` field
+- keeps cardinality bounded — cache keys and tag names are never
+  emitted as attributes
+
+See [`examples/opentelemetry/README.md`](./examples/opentelemetry/README.md)
+for setup and three suggested dashboards (hit rate, single-flight
+leadership distribution, op latency tails).
+
+---
+
 ## How it differs from `@fortedigital/nextjs-cache-handler`
 
 Three deliberate departures, all rooted in lessons from production
@@ -274,14 +350,17 @@ ESM and CJS dual-published, full TypeScript types, validated via
 
 ## Roadmap
 
-- **v0.1.0** *(target: 2026-05)* — Both handlers, SWR, Lua atomicity,
-  build-phase skip, `redis@5` + `ioredis` adapters, AbortSignal,
-  in-memory fallback with TTL, soft-tag freshness check
-- **v0.2.0** — Single-flight refresh lock (Lua SETNX), OpenTelemetry
-  forwarder example
+- **v0.1.0** *(2026-05)* — Both handlers, SWR, Lua atomicity, build-phase
+  skip, `redis@5` + `ioredis` adapters, AbortSignal, in-memory fallback
+  with TTL, soft-tag freshness check ✅
+- **v0.2.0** *(2026-05)* — Single-flight refresh lock with leader/follower
+  metrics, OpenTelemetry reference adapter, integration tests against
+  real Redis 7 (21 scenarios over `redis@5` + `ioredis`), GitHub Actions
+  OIDC publish path with provenance attestation ✅
 - **v0.3.0** — Vercel KV / Upstash Redis adapter, `'use cache: remote'`
-  multi-tier setup
-- **v0.4.0** — Cache stampede protection, request-scoped memoization
+  multi-tier setup, Redis Cluster load testing
+- **v0.4.0** — Cache stampede protection beyond single-flight,
+  request-scoped memoization
 
 ---
 

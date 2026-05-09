@@ -153,6 +153,11 @@ export class MockRedisClient implements RedisClientLike {
     for (const l of this.errorListeners) l(err);
   }
 
+  /** Schedule the next N commands to throw. Used by failure-path tests. */
+  failNext(count: number): void {
+    this.options.failNext = (this.options.failNext ?? 0) + count;
+  }
+
   private runLua(name: ScriptName, keys: string[], args: string[]): unknown {
     if (name === "setWithTags") {
       const [entryKey, ...tagKeys] = keys;

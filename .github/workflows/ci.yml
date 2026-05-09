@@ -37,6 +37,44 @@ jobs:
       - run: npx publint
       - run: npx attw --pack .
 
+  integration:
+    name: Integration tests (real Redis)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6390:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 1s
+          --health-timeout 2s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: Wait for Redis
+        run: |
+          for i in {1..20}; do
+            if redis-cli -h 127.0.0.1 -p 6390 ping >/dev/null 2>&1; then
+              echo "Redis is up"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Redis didn't come up in time" >&2
+          exit 1
+      - name: Run integration tests
+        env:
+          INTEGRATION_REDIS_URL: redis://127.0.0.1:6390
+        run: npm run test:integration
+
   spec-snapshot:
     name: Verify Next.js 16 spec snapshot
     runs-on: ubuntu-latest
