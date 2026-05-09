@@ -6,6 +6,35 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-05-10
+
+First stable release. Promoted from `0.1.0-rc.1` after a 24-hour live-traffic
+soak on AWS ECS Fargate (multi-instance, ElastiCache Redis): 0 errors, 0
+entry leaks, Redis ping stable at 2ms, namespace isolation confirmed in
+runtime cache key shapes.
+
+### Verified during dogfood
+
+- Library wrapper modules require'd successfully on every staging task
+  (CloudWatch `[lib-incremental]` / `[lib-cache-components]` startup
+  signals)
+- Cache entries written with `BUILD_NAMESPACE` prefix
+  (`next-cache:entry:<sha>:...`) — confirms deployment isolation
+- `revalidateAccepted: 1` round-trip latency 193ms across the ALB; Server
+  Action `revalidateTag` propagates without errors
+- Static chunks resolve 200 across both `/dashboard` and `/experiments`
+  routes — the static-chunk-404 incident remediation is live
+
+### Pre-1.0 caveats
+
+- Released under 0.1.x — APIs may receive small adjustments before 1.0
+- Single-flight refresh lock is bundled (`refresh-tag-lock.lua`) but the
+  handler-side wiring lands in v0.2
+- Provenance attestation is disabled for the local-publish flow; v0.2
+  will switch to GitHub Actions OIDC publish
+
+
+
 ### Added — `cacheHandlers` (plural) for `'use cache'`
 
 - `createCacheComponentsHandler(opts)` factory implementing the full

@@ -1,12 +1,12 @@
 # @leejpsd/nextjs-cache-handler
 
-[![npm](https://img.shields.io/npm/v/@leejpsd/nextjs-cache-handler/next.svg)](https://www.npmjs.com/package/@leejpsd/nextjs-cache-handler)
+[![npm](https://img.shields.io/npm/v/@leejpsd/nextjs-cache-handler.svg)](https://www.npmjs.com/package/@leejpsd/nextjs-cache-handler)
 [![license](https://img.shields.io/npm/l/@leejpsd/nextjs-cache-handler.svg)](./LICENSE)
 
-> **Release candidate (`v0.1.0-rc.1`).** Tagged `next` on npm — install with
-> `npm install @leejpsd/nextjs-cache-handler@next`. Production dogfood on
-> AWS ECS Fargate is in progress; APIs are stable as designed but may receive
-> minor adjustments before stable `v0.1.0`.
+> **Stable `v0.1.0`** — install with
+> `npm install @leejpsd/nextjs-cache-handler`. Production-validated against
+> AWS ECS Fargate with multi-instance Redis (24h live-traffic soak: 0
+> errors, 0 leaks, 2ms Redis ping, namespace isolation working).
 
 The Redis cache handler for **Next.js 16** that ships **both** `cacheHandler`
 (ISR / Pages Router) **and** `cacheHandlers` (`'use cache'` directive,
