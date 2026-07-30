@@ -134,7 +134,12 @@ export class MockRedisClient implements RedisClientLike {
   }): AsyncGenerator<string[]> {
     const re = matchToRegex(opts.MATCH);
     const matches = [...this.kv.keys()].filter((k) => re.test(k));
-    if (matches.length > 0) yield matches;
+    // Yield in COUNT-sized chunks like a real SCAN so callers' per-chunk
+    // processing paths get exercised.
+    const count = opts.COUNT ?? 100;
+    for (let i = 0; i < matches.length; i += count) {
+      yield matches.slice(i, i + count);
+    }
   }
 
   async ping(): Promise<string> {

@@ -235,6 +235,85 @@ describe("cacheHandlers — getExpiration (spec §2.3)", () => {
   });
 });
 
+describe("cacheHandlers — refreshTags tag propagation", () => {
+  it("picks up soft-invalidation markers written by another instance", async () => {
+    const client = new MockRedisClient();
+    client.isOpen = true;
+    const events: MetricEvent[] = [];
+    const instanceA = createCacheComponentsHandler({
+      client: () => client,
+      abortTimeoutMs: 100,
+    });
+    const instanceB = createCacheComponentsHandler({
+      client: () => client,
+      abortTimeoutMs: 100,
+      onMetric: (e) => events.push(e),
+    });
+
+    await instanceA.updateTags(["posts"]); // soft — writes a marker
+    await instanceB.refreshTags();
+
+    expect(await instanceB.getExpiration(["posts"])).toBe(T0);
+    // Served from the local mirror, not a cold Redis read.
+    expect(
+      events.some(
+        (e) => e.type === "tag.expiration.read" && e.meta?.source === "local"
+      )
+    ).toBe(true);
+  });
+
+  it("scans only the handler's own build namespace", async () => {
+    const client = new MockRedisClient();
+    client.isOpen = true;
+    const patterns: string[] = [];
+    const origScan = client.scanIterator.bind(client);
+    client.scanIterator = (opts) => {
+      patterns.push(opts.MATCH);
+      return origScan(opts);
+    };
+    const handler = createCacheComponentsHandler({
+      client: () => client,
+      abortTimeoutMs: 100,
+      buildNamespace: "ns-b",
+    });
+
+    await handler.refreshTags();
+
+    expect(patterns).toHaveLength(1);
+    expect(patterns[0]).toBe("next-cache:tag-expiration:ns-b:*");
+  });
+
+  it("propagates every marker — no 500-key truncation (old cap regression)", async () => {
+    const { handler, client, events } = setup();
+    for (let i = 0; i < 600; i += 1) {
+      client.kv.set(
+        `next-cache:tag-expiration:unversioned:tag-${i}`,
+        String(T0)
+      );
+    }
+
+    await handler.refreshTags();
+
+    // A marker past the old 500-key cap must still land in the mirror.
+    expect(await handler.getExpiration(["tag-599"])).toBe(T0);
+    expect(
+      events.some(
+        (e) => e.type === "tag.expiration.read" && e.meta?.source === "local"
+      )
+    ).toBe(true);
+  });
+
+  it("keeps locally recorded invalidations that have no visible marker yet", async () => {
+    const { handler, client } = setup();
+    client.failNext(1); // marker SET fails → only the local mirror knows
+    await handler.updateTags(["fresh-local"]);
+
+    await handler.refreshTags(); // scan finds no marker for the tag
+
+    expect(await handler.getExpiration(["fresh-local"])).toBe(T0);
+  });
+});
+
 describe("cacheHandlers — updateTags hard expire", () => {
   it("removes matching entries from cache (Lua revalidateHard)", async () => {
     const { handler, client } = setup();

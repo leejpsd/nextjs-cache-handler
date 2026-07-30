@@ -513,9 +513,20 @@ async function refreshTagsImpl(state: HandlerState): Promise<void> {
       async () => {
         const client = await state.conn.getOrConnect();
         if (!client) return;
-        // Pull all tag-expiration markers under the current namespace.
-        const pattern = `${state.opts.keyPrefix}${TAG_EXP_SUFFIX}*`;
-        const seen: string[] = [];
+        // Scan only the current namespace's markers. The old pattern omitted
+        // the namespace, so every deploy's markers were scanned and then
+        // discarded by stripExpPrefix; combined with a 500-key cap (SCAN
+        // restarts at cursor 0 each call) markers past the cap were never
+        // read. Chunk-by-chunk MGET replaces the cap: work per chunk stays
+        // small and no marker is silently skipped.
+        const ns = state.opts.hashTag
+          ? `{${state.resolveNs()}}`
+          : state.resolveNs();
+        const pattern = `${escapeMatch(
+          `${state.opts.keyPrefix}${TAG_EXP_SUFFIX}${ns}:`
+        )}*`;
+        const scanStartMs = Date.now();
+        const fresh = new Map<string, number>();
         for await (const chunk of client.scanIterator({
           MATCH: pattern,
           COUNT: 100,
@@ -523,28 +534,60 @@ async function refreshTagsImpl(state: HandlerState): Promise<void> {
           const keys = Array.isArray(chunk)
             ? chunk.map(String)
             : [String(chunk)];
-          seen.push(...keys);
-          if (seen.length >= 500) break; // Bound work per request.
+          if (keys.length === 0) continue;
+          const values = await client.mGet(keys);
+          for (let i = 0; i < keys.length; i += 1) {
+            const v = values[i];
+            if (!v) continue;
+            const ts = Number.parseInt(v, 10);
+            if (!Number.isFinite(ts)) continue;
+            // Strip prefix back to bare tag name.
+            const key = keys[i];
+            if (key === undefined) continue;
+            const tag = stripExpPrefix(state, key);
+            if (tag) fresh.set(tag, ts);
+          }
         }
-        if (seen.length === 0) return;
-        const values = await client.mGet(seen);
-        for (let i = 0; i < seen.length; i += 1) {
-          const v = values[i];
-          if (!v) continue;
-          const ts = Number.parseInt(v, 10);
-          if (!Number.isFinite(ts)) continue;
-          // Strip prefix back to bare tag name.
-          const key = seen[i];
-          if (key === undefined) continue;
-          const tag = stripExpPrefix(state, key);
-          if (tag) state.localTagTimestamps.set(tag, ts);
+        // Invalidations recorded locally while the scan ran may not have had
+        // visible markers yet — carry them over so they aren't lost.
+        for (const [tag, ts] of state.localTagTimestamps) {
+          if (ts >= scanStartMs && (fresh.get(tag) ?? 0) < ts) {
+            fresh.set(tag, ts);
+          }
         }
+        // Wholesale replacement keeps the mirror bounded by live-marker
+        // count: tags whose markers expired out of Redis (7d TTL) drop out
+        // here. Only reached on a complete scan — a failed or timed-out scan
+        // keeps the previous mirror instead of installing partial data.
+        state.localTagTimestamps = fresh;
       }
     );
   } catch (err) {
     state.logger.warn("refreshTags() error swallowed", {
       message: (err as Error).message,
     });
+  }
+}
+
+/** Escape Redis MATCH glob metacharacters so key prefixes match literally. */
+function escapeMatch(s: string): string {
+  return s.replace(/[\\*?[\]]/g, "\\$&");
+}
+
+/** Cap for the process-local tag-timestamp mirrors. */
+const MAX_LOCAL_TAG_ENTRIES = 10_000;
+
+/** Drop the oldest-timestamped entries until the map fits the cap. */
+function pruneOldestByTimestamp(
+  map: Map<string, number>,
+  maxEntries: number
+): void {
+  if (map.size <= maxEntries) return;
+  const byAge = [...map.entries()].sort((a, b) => a[1] - b[1]);
+  const drop = map.size - maxEntries;
+  for (let i = 0; i < drop; i += 1) {
+    const entry = byAge[i];
+    if (entry) map.delete(entry[0]);
   }
 }
 
@@ -623,6 +666,10 @@ async function updateTagsImpl(
     state.localTagTimestamps.set(t, now);
     state.memTagExp.set(t, now);
   }
+  // memTagExp has no scan-based rebuild to shed dead tags (refreshTags only
+  // replaces localTagTimestamps), so cap it here against unbounded growth in
+  // high-tag-cardinality apps.
+  pruneOldestByTimestamp(state.memTagExp, MAX_LOCAL_TAG_ENTRIES);
 
   if (
     !gateRedis(state)
