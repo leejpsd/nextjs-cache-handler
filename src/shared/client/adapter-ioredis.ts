@@ -105,6 +105,9 @@ function adapt(client: AnyRedis, isClusterClient = false): RedisClientLike {
       client.on(event, listener);
       return client;
     },
+    dispose: () => {
+      client.disconnect();
+    },
   };
 }
 

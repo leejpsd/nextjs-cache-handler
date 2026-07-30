@@ -32,6 +32,13 @@ export interface RedisClientLike {
   }): AsyncIterable<string[] | string>;
   ping(): Promise<string>;
   on(event: "error", listener: (err: Error) => void): unknown;
+  /**
+   * Close the underlying connection without waiting for pending replies.
+   * Called by the connection manager when a dead client is replaced. Optional:
+   * raw `redis@5` clients expose `destroy` and ioredis exposes `disconnect`,
+   * both of which are used as fallbacks when this is absent.
+   */
+  dispose?(): void;
 }
 
 export type RedisClientFactory = () =>
