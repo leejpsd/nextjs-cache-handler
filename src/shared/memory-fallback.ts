@@ -29,9 +29,21 @@ function clampTimerMs(ms: number): number {
   return Math.min(Math.max(0, ms), MAX_TIMER_MS);
 }
 
+/**
+ * Default entry cap for the fallback stores. The fallback exists to ride out
+ * a Redis outage, not to replace it — an unbounded map filled by a long
+ * outage on a busy site is an OOM waiting to happen.
+ */
+const DEFAULT_MAX_ENTRIES = 1000;
+
 export class MemoryStore<T> {
   private readonly kv = new Map<string, MemoryEntry<T>>();
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly maxEntries: number;
+
+  constructor(maxEntries: number = DEFAULT_MAX_ENTRIES) {
+    this.maxEntries = Math.max(1, maxEntries);
+  }
 
   set(key: string, value: T, ttlSeconds: number): void {
     this.delete(key);
@@ -42,6 +54,12 @@ export class MemoryStore<T> {
       (timer as { unref: () => void }).unref();
     }
     this.timers.set(key, timer);
+    // LRU eviction: Map preserves insertion order and get() re-inserts on
+    // hit, so the first key is always the least recently used.
+    while (this.kv.size > this.maxEntries) {
+      const oldest = this.kv.keys().next().value as string;
+      this.delete(oldest);
+    }
   }
 
   get(key: string): T | null {
@@ -51,6 +69,9 @@ export class MemoryStore<T> {
       this.delete(key);
       return null;
     }
+    // Refresh recency for LRU ordering.
+    this.kv.delete(key);
+    this.kv.set(key, entry);
     return entry.value;
   }
 
@@ -97,20 +118,32 @@ export class MemorySetStore {
   private readonly sets = new Map<string, Set<string>>();
   private readonly expiresAt = new Map<string, number>();
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly maxSets: number;
+
+  constructor(maxSets: number = DEFAULT_MAX_ENTRIES) {
+    this.maxSets = Math.max(1, maxSets);
+  }
 
   sAdd(key: string, member: string | string[]): number {
     const members = Array.isArray(member) ? member : [member];
     let set = this.sets.get(key);
     if (!set) {
       set = new Set();
-      this.sets.set(key, set);
+    } else {
+      // Refresh recency for LRU ordering.
+      this.sets.delete(key);
     }
+    this.sets.set(key, set);
     let added = 0;
     for (const m of members) {
       if (!set.has(m)) {
         set.add(m);
         added += 1;
       }
+    }
+    while (this.sets.size > this.maxSets) {
+      const oldest = this.sets.keys().next().value as string;
+      this.delete(oldest);
     }
     return added;
   }

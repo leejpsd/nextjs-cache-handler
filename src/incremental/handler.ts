@@ -113,7 +113,7 @@ function init(opts: CacheHandlerOptions): HandlerState {
     logger,
     emit,
     conn,
-    memEntries: new MemoryStore<string>(),
+    memEntries: new MemoryStore<string>(opts.memoryMaxEntries),
     memTagStates: new Map(),
     resolveNs: () => resolveBuildNamespace(opts.buildNamespace),
   };

@@ -172,6 +172,14 @@ export interface CacheHandlerOptions {
   fallback?: FallbackStrategy;
 
   /**
+   * Maximum number of entries kept by the in-memory fallback store (and the
+   * same cap for its tag-set index). Least-recently-used entries are evicted
+   * beyond the cap, so a long Redis outage on a busy site degrades to partial
+   * caching instead of unbounded process memory growth. Default: 1000.
+   */
+  memoryMaxEntries?: number;
+
+  /**
    * Whether to keep returning a stale entry in the SWR window
    * (`revalidate < age < expire`) while Next.js triggers a background refresh.
    *
