@@ -705,20 +705,24 @@ async function updateTagsImpl(
           }
           return;
         }
-        for (const t of tags) {
-          if (isHardExpire) {
-            await execLuaScript<number>(
-              client,
-              "revalidateHard",
-              [tagKey(state, t), tagExpKey(state, t)],
-              [String(now), String(TAG_EXP_MARKER_TTL_SEC)]
-            );
-          } else {
-            await client.set(tagExpKey(state, t), String(now), {
-              EX: TAG_EXP_MARKER_TTL_SEC,
-            });
-          }
-        }
+        // Concurrent fan-out instead of a per-tag await chain: N tags cost
+        // ~1 round trip (redis@5 auto-pipelines same-tick commands; ioredis
+        // has enableAutoPipelining set in our factory) instead of N. With
+        // many tags the sequential version could exceed abortTimeoutMs.
+        await Promise.all(
+          tags.map((t) =>
+            isHardExpire
+              ? execLuaScript<number>(
+                  client,
+                  "revalidateHard",
+                  [tagKey(state, t), tagExpKey(state, t)],
+                  [String(now), String(TAG_EXP_MARKER_TTL_SEC)]
+                )
+              : client.set(tagExpKey(state, t), String(now), {
+                  EX: TAG_EXP_MARKER_TTL_SEC,
+                })
+          )
+        );
       }
     );
     state.emit({

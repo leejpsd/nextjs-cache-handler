@@ -235,6 +235,39 @@ describe("cacheHandlers — getExpiration (spec §2.3)", () => {
   });
 });
 
+describe("cacheHandlers — updateTags fan-out (pipelining regression)", () => {
+  it("many tags complete within one command latency, not N sequential round trips", async () => {
+    // 20 tags × 30ms per command would take 600ms sequentially and trip the
+    // 100ms abort (hard path throws). Concurrent fan-out finishes in ~30ms.
+    vi.useRealTimers();
+    const client = new MockRedisClient({ delayMs: 30 });
+    client.isOpen = true;
+    const handler = createCacheComponentsHandler({
+      client: () => client,
+      abortTimeoutMs: 100,
+    });
+    const tags = Array.from({ length: 20 }, (_, i) => `tag-${i}`);
+
+    await expect(handler.updateTags(tags, { expire: 0 })).resolves.toBeUndefined();
+  });
+
+  it("hard expire across many tags removes every tag's entries", async () => {
+    const { handler, client } = setup();
+    const tags = Array.from({ length: 10 }, (_, i) => `t-${i}`);
+    for (let i = 0; i < 10; i += 1) {
+      await handler.set(
+        `k-${i}`,
+        Promise.resolve(makeEntry({ tags: [`t-${i}`] }))
+      );
+    }
+
+    await handler.updateTags(tags, { expire: 0 });
+
+    const remaining = [...client.kv.keys()].filter((k) => k.includes("entry:"));
+    expect(remaining).toEqual([]);
+  });
+});
+
 describe("cacheHandlers — refreshTags tag propagation", () => {
   it("picks up soft-invalidation markers written by another instance", async () => {
     const client = new MockRedisClient();

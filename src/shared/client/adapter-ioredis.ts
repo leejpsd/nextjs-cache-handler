@@ -133,6 +133,9 @@ export function createIoredisClient(
     tls: config.tls ? {} : undefined,
     lazyConnect: true,
     maxRetriesPerRequest: 1,
+    // Batch same-tick commands into one RTT (matches redis@5's default
+    // behavior) — makes Promise.all fan-outs a single pipeline.
+    enableAutoPipelining: true,
   });
 }
 
@@ -152,5 +155,7 @@ export function createIoredisCluster(
     },
     enableReadyCheck: true,
     lazyConnect: true,
+    // Same-slot commands issued in the same tick share one pipeline.
+    enableAutoPipelining: true,
   });
 }
