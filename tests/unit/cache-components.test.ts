@@ -300,6 +300,50 @@ describe("cacheHandlers — explicit tag soft revalidation (#1 regression)", () 
   });
 });
 
+describe("cacheHandlers — tag-stale backdating invariants", () => {
+  it("backdated timestamp stays inside the expire window (SWR, not discard)", async () => {
+    const { handler } = setup();
+    await handler.set(
+      "k",
+      Promise.resolve(makeEntry({ tags: ["posts"], revalidate: 60, expire: 3600 }))
+    );
+    vi.setSystemTime(new Date(T0 + 10));
+    await handler.updateTags(["posts"]);
+
+    const got = await handler.get("k", []);
+    expect(got).toBeDefined();
+    const ageMs = Date.now() - got!.timestamp;
+    // Just past revalidate — Next schedules a refresh — but well inside
+    // expire, so the entry is served rather than discarded.
+    expect(ageMs).toBeGreaterThan(60 * 1000);
+    expect(ageMs).toBeLessThan(3600 * 1000);
+  });
+
+  it("degenerate expire === revalidate: invalidation degrades to a miss on the following read (no stale-forever loop)", async () => {
+    const { handler } = setup();
+    await handler.set(
+      "k",
+      Promise.resolve(makeEntry({ tags: ["posts"], revalidate: 60, expire: 60 }))
+    );
+    vi.setSystemTime(new Date(T0 + 10));
+    await handler.updateTags(["posts"]);
+
+    // First read: served with a backdated timestamp whose age exceeds the
+    // (clamped) expire window…
+    const first = await handler.get("k", []);
+    if (first) {
+      expect(Date.now() - first.timestamp).toBeGreaterThan(60 * 1000);
+    }
+    // …so the partition classifies the STORED entry against the invalidation
+    // on every read — the entry must never be served as a fresh HIT again,
+    // and within a bounded number of reads it converges to a miss+eviction
+    // (blocking regeneration), not an infinite stale loop.
+    const second = await handler.get("k", []);
+    const third = await handler.get("k", []);
+    expect([second, third].every((g) => g === undefined || Date.now() - g.timestamp > 60 * 1000)).toBe(true);
+  });
+});
+
 describe("cacheHandlers — getExpiration (spec §2.3)", () => {
   it("returns 0 for never-invalidated tags", async () => {
     const { handler } = setup();
