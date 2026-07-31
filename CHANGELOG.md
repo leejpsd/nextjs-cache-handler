@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.1
+
+### Patch Changes
+
+- [`f07e91b`](https://github.com/leejpsd/nextjs-cache-handler/commit/f07e91b432be6d52885f2f0a83bfb6c63d519bbe) Thanks [@leejpsd](https://github.com/leejpsd)! - Refresh the npm package description and keywords for the 0.3 feature set:
+  Next.js 15/16, built-in compression, Redis Sentinel, OpenTelemetry, and the
+  multi-instance AWS validation results.
+
 ## 0.3.0
 
 ### Minor Changes
