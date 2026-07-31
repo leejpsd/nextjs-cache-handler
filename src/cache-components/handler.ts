@@ -111,6 +111,7 @@ interface HandlerState {
   pubsub: {
     active: boolean;
     disabled: boolean;
+    attempting: boolean;
     lastAttempt: number;
     stop?: () => Promise<void>;
   };
@@ -152,7 +153,7 @@ function init(opts: CacheHandlerOptions): HandlerState {
     memTags: new MemorySetStore(opts.memoryMaxEntries),
     memTagExp: new Map(),
     localTagTimestamps: new Map(),
-    pubsub: { active: false, disabled: false, lastAttempt: 0 },
+    pubsub: { active: false, disabled: false, attempting: false, lastAttempt: 0 },
     resolveNs: () => resolveBuildNamespace(opts.buildNamespace),
     instanceId:
       process.env.HOSTNAME ||
@@ -570,12 +571,18 @@ const SUBSCRIBE_RETRY_MS = 5000;
  * missing/broken subscription only costs latency, not correctness.
  */
 async function ensureTagSubscription(state: HandlerState): Promise<void> {
-  if (!state.opts.tagPubSub || state.pubsub.active || state.pubsub.disabled) {
+  if (
+    !state.opts.tagPubSub ||
+    state.pubsub.active ||
+    state.pubsub.disabled ||
+    state.pubsub.attempting
+  ) {
     return;
   }
   const now = Date.now();
   if (now - state.pubsub.lastAttempt < SUBSCRIBE_RETRY_MS) return;
   state.pubsub.lastAttempt = now;
+  state.pubsub.attempting = true;
 
   try {
     const client = await state.conn.getOrConnect();
@@ -610,6 +617,8 @@ async function ensureTagSubscription(state: HandlerState): Promise<void> {
     state.logger.warn("tagPubSub subscribe failed — will retry", {
       message: (err as Error).message,
     });
+  } finally {
+    state.pubsub.attempting = false;
   }
 }
 

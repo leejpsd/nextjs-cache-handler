@@ -109,11 +109,26 @@ Facts that prevent misdiagnosis:
 | `abortTimeoutMs` | 1500 | Per-op Redis deadline; timeouts degrade to miss |
 | `hashTag: true` | off | REQUIRED on Redis Cluster |
 | `onMetric` | — | Wire `createOtelMetricEmitter()` from `@leejpsd/nextjs-cache-handler/otel` |
+| `tagPubSub: true` | off | 0.4+: push-based cross-instance invalidation (~3ms vs seconds); polling stays as safety net; not on Cluster |
 
 Reliability built in (0.3+): reconnect with exponential backoff (1s→30s cap),
 bounded memory fallback, per-op timeouts. A Redis outage degrades to
 in-memory serving; reconnection is automatic (validated with a live
 ElastiCache reboot drill: 2550 requests, zero 5xx).
+
+### 0.4+ deployment accelerators
+
+- **Seed the cache at deploy time** so a fresh deployment's first requests
+  are HITs instead of a regeneration stampede:
+  `REDIS_URL=... DEPLOYMENT_VERSION=<deploy-id> npx nextjs-cache-handler seed`
+  (run after `next build`, e.g. a Docker entrypoint step; NX semantics —
+  never overwrites live entries).
+- **`npx nextjs-cache-handler init --yes`** wires everything above
+  automatically; **`npx nextjs-cache-handler doctor`** is the first command
+  to run when debugging connectivity or key-layout issues.
+- **MCP server** for cache operations from your agent:
+  `@leejpsd/nextjs-cache-handler-mcp` (cache_health, tag_state,
+  invalidate_tag dry-run, …).
 
 ## 6. Production checklist
 
