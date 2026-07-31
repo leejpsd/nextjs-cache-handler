@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.0
+
+### Minor Changes
+
+- [`dc1ac0a`](https://github.com/leejpsd/nextjs-cache-handler/commit/dc1ac0a0b29e73485f4af587f8ec0f4b68d1d54f) Thanks [@leejpsd](https://github.com/leejpsd)! - Reliability fixes (reconnect backoff instead of a permanent connect-failure
+  latch, bounded memory fallback, namespace-scoped tag propagation without
+  truncation, strict `fallback: "never"` honored by the ISR handler, working
+  ESM peer loading) plus new features: Next.js 15 ISR support, request-scoped
+  GET deduplication, transparent gzip/brotli value compression, Redis Sentinel
+  support, a built-in OpenTelemetry adapter at `/otel`, and `memoryMaxEntries`.
+
 All notable changes to this project are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
@@ -164,8 +175,6 @@ runtime cache key shapes.
   handler-side wiring lands in v0.2
 - Provenance attestation is disabled for the local-publish flow; v0.2
   will switch to GitHub Actions OIDC publish
-
-
 
 ### Added — `cacheHandlers` (plural) for `'use cache'`
 
