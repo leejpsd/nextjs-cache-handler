@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.2
+
+### Patch Changes
+
+- [`6f35ff3`](https://github.com/leejpsd/nextjs-cache-handler/commit/6f35ff3d6eb6d84a842b8afc2677ae2545e2deba) Thanks [@leejpsd](https://github.com/leejpsd)! - Fix: soft revalidation of explicit `cacheTag()` tags — `revalidateTag(tag, "max")` — was a no-op on time-fresh entries. `get()` now folds the entry's own tags into the freshness check and serves tag-invalidated entries as stale-while-revalidate (backdated past `revalidate` so Next schedules a background re-render), matching the spec's soft-invalidation semantics. Hard invalidation (`{ expire: 0 }`) was already correct. Thanks to @eveyrat for the report (#1) and @unitedworldwrestling for the fix approach (#2).
+
 ## 0.3.1
 
 ### Patch Changes
