@@ -27,10 +27,12 @@ function adapt(client: AnyRedis, isClusterClient = false): RedisClientLike {
       }
     },
     get: (k) => client.get(k),
-    set: (k, v, opts) =>
-      opts?.EX !== undefined
-        ? client.set(k, v, "EX", opts.EX)
-        : client.set(k, v),
+    set: (k, v, opts) => {
+      const args: (string | number)[] = [];
+      if (opts?.EX !== undefined) args.push("EX", opts.EX);
+      if (opts?.NX) args.push("NX");
+      return (client.set as (...a: unknown[]) => Promise<unknown>)(k, v, ...args);
+    },
     del: async (keys) => {
       const arr = Array.isArray(keys) ? keys : [keys];
       if (arr.length === 0) return 0;

@@ -54,8 +54,13 @@ export class MockRedisClient implements RedisClientLike {
     return this.kv.get(key) ?? null;
   }
 
-  async set(key: string, value: string, _opts?: { EX?: number }): Promise<unknown> {
+  async set(
+    key: string,
+    value: string,
+    opts?: { EX?: number; NX?: boolean }
+  ): Promise<unknown> {
     await this.tick();
+    if (opts?.NX && this.kv.has(key)) return null; // Redis returns nil when NX blocks
     this.kv.set(key, value);
     return "OK";
   }

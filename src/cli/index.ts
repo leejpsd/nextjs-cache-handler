@@ -19,6 +19,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { buildClient } from "../shared/client/index.js";
+import { seedBuildOutput } from "../seed/index.js";
 import type { RedisClientLike } from "../types.js";
 
 const OK = "[ok]";
@@ -321,6 +322,54 @@ export async function doctor(ctx: Ctx): Promise<number> {
   }
 }
 
+
+// ─── seed ────────────────────────────────────────────────────────────────────
+
+export async function seed(ctx: Ctx): Promise<number> {
+  const { args, log } = ctx;
+  const urlIdx = args.indexOf("--url");
+  const url = urlIdx >= 0 ? args[urlIdx + 1] : process.env.REDIS_URL;
+  if (!url) {
+    log(`${ERR} no Redis URL — pass --url <redis-url> or set REDIS_URL`);
+    return 1;
+  }
+  const dirIdx = args.indexOf("--dir");
+  const dir = (dirIdx >= 0 ? args[dirIdx + 1] : undefined) ?? ".next";
+
+  if (!process.env.DEPLOYMENT_VERSION) {
+    log(`${WARN} DEPLOYMENT_VERSION not set — seeding into the "unversioned" namespace`);
+  }
+
+  try {
+    const summary = await seedBuildOutput({
+      client: { type: "redis", url },
+      dir,
+    });
+    log(`${OK} seeded: ${summary.routes} app routes, ${summary.pages} pages routes, ${summary.fetch} fetch entries`);
+    if (summary.skippedExisting > 0)
+      log(`${OK} left ${summary.skippedExisting} newer live entries untouched (NX)`);
+    if (summary.skippedIncomplete > 0)
+      log(`${WARN} skipped ${summary.skippedIncomplete} routes with incomplete build files (dynamic/PPR-partial)`);
+    for (const e of summary.errors.slice(0, 5)) log(`${WARN} ${e}`);
+    return summary.errors.length > 0 ? 1 : 0;
+  } catch (err) {
+    const msg = (err as Error).message;
+    if (/Cannot find module 'redis'/.test(msg)) {
+      // Retry with ioredis when only that peer is installed.
+      try {
+        const summary = await seedBuildOutput({ client: { type: "ioredis", url }, dir });
+        log(`${OK} seeded: ${summary.routes} app routes, ${summary.pages} pages routes, ${summary.fetch} fetch entries`);
+        return 0;
+      } catch (err2) {
+        log(`${ERR} ${(err2 as Error).message}`);
+        return 1;
+      }
+    }
+    log(`${ERR} ${msg}`);
+    return 1;
+  }
+}
+
 // ─── entry ───────────────────────────────────────────────────────────────────
 
 export async function main(argv: string[] = process.argv.slice(2)): Promise<number> {
@@ -336,12 +385,15 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       return init(ctx);
     case "doctor":
       return doctor(ctx);
+    case "seed":
+      return seed(ctx);
     default:
       console.log(`nextjs-cache-handler <command>
 
 Commands:
   init    [--yes] [--dry-run] [--skills]   wire handlers into this Next.js app
   doctor  [--url <redis-url>]              connectivity + cache diagnostics
+  seed    [--dir .next] [--url <redis-url>] seed prerendered build output into Redis
 
 Agent setup instructions:
   https://raw.githubusercontent.com/leejpsd/nextjs-cache-handler/main/setup-instructions/setup.md`);

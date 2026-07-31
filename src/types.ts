@@ -11,7 +11,11 @@ export interface RedisClientLike {
   isOpen: boolean;
   connect(): Promise<unknown>;
   get(key: string): Promise<string | null>;
-  set(key: string, value: string, opts?: { EX?: number }): Promise<unknown>;
+  set(
+    key: string,
+    value: string,
+    opts?: { EX?: number; NX?: boolean }
+  ): Promise<unknown>;
   del(keys: string | string[]): Promise<number>;
   sAdd(key: string, member: string | string[]): Promise<number>;
   sMembers(key: string): Promise<string[]>;

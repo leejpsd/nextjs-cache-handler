@@ -55,6 +55,9 @@
       ],
       "otel": [
         "./dist/otel/index.d.ts"
+      ],
+      "seed": [
+        "./dist/seed/index.d.ts"
       ]
     }
   },
@@ -117,6 +120,16 @@
       "require": {
         "types": "./dist/ops/index.d.cts",
         "default": "./dist/ops/index.cjs"
+      }
+    },
+    "./seed": {
+      "import": {
+        "types": "./dist/seed/index.d.ts",
+        "default": "./dist/seed/index.js"
+      },
+      "require": {
+        "types": "./dist/seed/index.d.cts",
+        "default": "./dist/seed/index.cjs"
       }
     },
     "./otel": {

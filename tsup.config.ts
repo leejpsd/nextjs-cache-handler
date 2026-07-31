@@ -10,6 +10,7 @@ export default defineConfig({
     "ops/index": "src/ops/index.ts",
     "otel/index": "src/otel/index.ts",
     "cli/index": "src/cli/index.ts",
+    "seed/index": "src/seed/index.ts",
   },
   format: ["esm", "cjs"],
   // Inject createRequire-based shims so the runtime `require()` calls in the
