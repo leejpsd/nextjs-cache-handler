@@ -254,10 +254,50 @@ async function readTagStates(
 export class IncrementalRedisCacheHandler {
   private readonly state: HandlerState;
   private readonly revalidatedTags: string[];
+  /**
+   * Request-scoped memo of Redis entry reads. Next.js instantiates this class
+   * per request (and calls resetRequestCache() at request boundaries when it
+   * reuses an instance), so entries live at most one request. Bounded by the
+   * number of distinct cache keys a single request touches.
+   */
+  private readonly requestMemo = new Map<string, Promise<string | null>>();
 
   constructor(state: HandlerState, ctx?: { revalidatedTags?: string[] }) {
     this.state = state;
     this.revalidatedTags = normalizeTags(ctx?.revalidatedTags);
+  }
+
+  /**
+   * Redis entry read, deduplicated per request: parallel RSC renders or
+   * repeated fetch() calls hitting the same cache key share one GET. The
+   * memoized promise never rejects — errors are converted to a miss (with
+   * the same timeout metric the inline path emitted before).
+   */
+  private readEntryDeduped(eKey: string): Promise<string | null> {
+    const memoized = this.requestMemo.get(eKey);
+    if (memoized) {
+      this.state.emit({ type: "cache.get.deduped" });
+      return memoized;
+    }
+    const read = withAbortSignal(
+      "incremental.get",
+      this.state.opts.abortTimeoutMs,
+      async () => {
+        const client = await this.state.conn.getOrConnect();
+        if (!client) return null;
+        return await client.get(eKey);
+      }
+    ).catch((err: unknown) => {
+      if (err instanceof CacheTimeoutError) {
+        this.state.emit({
+          type: "redis.timeout",
+          meta: { op: "incremental.get" },
+        });
+      }
+      return null;
+    });
+    this.requestMemo.set(eKey, read);
+    return read;
   }
 
   async get(
@@ -278,22 +318,7 @@ export class IncrementalRedisCacheHandler {
 
       let raw: string | null = null;
       if (useRedis) {
-        try {
-          raw = await withAbortSignal(
-            "incremental.get",
-            this.state.opts.abortTimeoutMs,
-            async () => {
-              const client = await this.state.conn.getOrConnect();
-              if (!client) return null;
-              return await client.get(eKey);
-            }
-          );
-        } catch (err) {
-          if (err instanceof CacheTimeoutError) {
-            this.state.emit({ type: "redis.timeout", meta: { op: "incremental.get" } });
-          }
-          raw = null;
-        }
+        raw = await this.readEntryDeduped(eKey);
       }
       // Memory is a fallback (or the primary store for instance-local tags);
       // `fallback: "never"` surfaces Redis unavailability as a miss instead.
@@ -344,6 +369,9 @@ export class IncrementalRedisCacheHandler {
       const record: CacheRecord = { lastModified: Date.now(), value: data };
       const serialized = serializeCacheRecord(record);
       const eKey = entryKey(this.state, cacheKey);
+      // The stored value changes — a memoized read (including a memoized
+      // miss) must not shadow it for the rest of the request.
+      this.requestMemo.delete(eKey);
 
       const useRedis =
         !useLocal &&
@@ -453,8 +481,7 @@ export class IncrementalRedisCacheHandler {
   }
 
   resetRequestCache(): void {
-    // Per-request memoization isn't shared between requests anyway; nothing
-    // to clear at this level.
+    this.requestMemo.clear();
   }
 }
 

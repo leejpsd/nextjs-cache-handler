@@ -126,6 +126,80 @@ describe("incremental cacheHandler — basic ISR round-trip", () => {
   });
 });
 
+describe("incremental cacheHandler — request-scoped read deduplication", () => {
+  const body = {
+    kind: "APP_PAGE",
+    body: Buffer.from("hello"),
+    headers: {},
+  } as const;
+
+  it("parallel get() calls for the same key share one Redis GET", async () => {
+    const { Handler, client } = setup();
+    const h = new Handler();
+    await h.set("/blog", { ...body }, { kind: "APP_PAGE" });
+    const getSpy = vi.spyOn(client, "get");
+
+    const [a, b] = await Promise.all([
+      h.get("/blog", { kind: "APP_PAGE" }),
+      h.get("/blog", { kind: "APP_PAGE" }),
+    ]);
+
+    expect(a).not.toBeNull();
+    expect(b).not.toBeNull();
+    expect(getSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("sequential get() calls within one request are also deduplicated", async () => {
+    const { Handler, client } = setup();
+    const h = new Handler();
+    await h.set("/blog", { ...body }, { kind: "APP_PAGE" });
+    const getSpy = vi.spyOn(client, "get");
+
+    await h.get("/blog", { kind: "APP_PAGE" });
+    await h.get("/blog", { kind: "APP_PAGE" });
+
+    expect(getSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("resetRequestCache() drops the memo so the next request reads Redis again", async () => {
+    const { Handler, client } = setup();
+    const h = new Handler();
+    await h.set("/blog", { ...body }, { kind: "APP_PAGE" });
+    const getSpy = vi.spyOn(client, "get");
+
+    await h.get("/blog", { kind: "APP_PAGE" });
+    h.resetRequestCache();
+    await h.get("/blog", { kind: "APP_PAGE" });
+
+    expect(getSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("set() invalidates a memoized miss for the same key", async () => {
+    const { Handler } = setup();
+    const h = new Handler();
+
+    expect(await h.get("/blog", { kind: "APP_PAGE" })).toBeNull(); // memoized miss
+    await h.set("/blog", { ...body }, { kind: "APP_PAGE" });
+    const out = await h.get("/blog", { kind: "APP_PAGE" });
+
+    expect(out).not.toBeNull();
+    expect(out?.lastModified).toBe(T0);
+  });
+
+  it("different keys are not conflated", async () => {
+    const { Handler, client } = setup();
+    const h = new Handler();
+    await h.set("/a", { ...body }, { kind: "APP_PAGE" });
+    await h.set("/b", { ...body }, { kind: "APP_PAGE" });
+    const getSpy = vi.spyOn(client, "get");
+
+    await h.get("/a", { kind: "APP_PAGE" });
+    await h.get("/b", { kind: "APP_PAGE" });
+
+    expect(getSpy).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe("incremental cacheHandler — fallback: 'never' consistency (parity with plural handler)", () => {
   function setupNever() {
     const client = new MockRedisClient();

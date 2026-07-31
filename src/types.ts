@@ -87,6 +87,7 @@ export type FallbackStrategy = "auto" | "always" | "never";
 export type MetricEventType =
   | "cache.hit"
   | "cache.miss"
+  | "cache.get.deduped"
   | "cache.stale"
   | "cache.stale.refresh.leader"
   | "cache.stale.refresh.follower"
