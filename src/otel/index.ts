@@ -26,6 +26,7 @@
  */
 
 import type { MetricEmitter, MetricEvent } from "../types.js";
+import { nodeRequire } from "../shared/node-require.js";
 
 export interface OtelCounterLike {
   add(value: number, attributes?: Record<string, string>): void;
@@ -56,8 +57,8 @@ export interface OtelApiLike {
 export interface OtelEmitterOptions {
   /**
    * The `@opentelemetry/api` module (or a compatible object). Defaults to
-   * `require("@opentelemetry/api")` — pass explicitly in ESM-only setups
-   * or tests.
+   * `require("@opentelemetry/api")` (via createRequire, so it works from
+   * both the CJS and ESM builds) — pass explicitly in tests or custom setups.
    */
   api?: OtelApiLike;
   /** Meter name. Default: "nextjs-cache-handler". */
@@ -84,7 +85,7 @@ function resolveApi(): OtelApiLike {
   try {
     // Runtime-only lookup — @opentelemetry/api is NOT a dependency of this
     // package. It must come from the application.
-    return require("@opentelemetry/api") as OtelApiLike;
+    return nodeRequire("@opentelemetry/api") as OtelApiLike;
   } catch {
     throw new Error(
       "[next-cache] createOtelMetricEmitter needs @opentelemetry/api. " +

@@ -10,6 +10,7 @@
 import type { Cluster, Redis } from "ioredis";
 
 import type { RedisClientConfig, RedisClientLike } from "../../types.js";
+import { nodeRequire } from "../node-require.js";
 
 type AnyRedis = Redis | Cluster;
 
@@ -123,7 +124,7 @@ export function createIoredisClient(
   config: Extract<RedisClientConfig, { type: "ioredis" }>
 ): Redis {
    
-  const IORedis = require("ioredis") as typeof import("ioredis");
+  const IORedis = nodeRequire("ioredis") as typeof import("ioredis");
   // ioredis exports the class as both `default` and a named property.
   // Hitting the default works for both ESM and CJS consumers.
   const Ctor = IORedis.default ?? (IORedis as unknown as typeof import("ioredis").default);
@@ -142,7 +143,7 @@ export function createIoredisClient(
 export function createIoredisSentinel(
   config: Extract<RedisClientConfig, { type: "sentinel" }>
 ): Redis {
-  const IORedis = require("ioredis") as typeof import("ioredis");
+  const IORedis = nodeRequire("ioredis") as typeof import("ioredis");
   const Ctor = IORedis.default ?? (IORedis as unknown as typeof import("ioredis").default);
   return new Ctor({
     sentinels: config.sentinels,
@@ -161,7 +162,7 @@ export function createIoredisCluster(
   config: Extract<RedisClientConfig, { type: "cluster" }>
 ): Cluster {
    
-  const IORedis = require("ioredis") as typeof import("ioredis");
+  const IORedis = nodeRequire("ioredis") as typeof import("ioredis");
   const ClusterCtor =
     IORedis.Cluster ??
     (IORedis.default as unknown as { Cluster: typeof import("ioredis").Cluster })

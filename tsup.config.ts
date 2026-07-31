@@ -11,6 +11,11 @@ export default defineConfig({
     "otel/index": "src/otel/index.ts",
   },
   format: ["esm", "cjs"],
+  // Inject createRequire-based shims so the runtime `require()` calls in the
+  // client/OTel factories work from the ESM build too (without this, esbuild
+  // emits a __require fallback that throws "Dynamic require of X is not
+  // supported" in pure-ESM consumers).
+  shims: true,
   dts: true,
   splitting: false,
   sourcemap: true,

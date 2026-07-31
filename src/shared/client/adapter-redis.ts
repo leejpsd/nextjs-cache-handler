@@ -11,6 +11,7 @@
 import type { RedisClientType } from "redis";
 
 import type { RedisClientConfig, RedisClientLike } from "../../types.js";
+import { nodeRequire } from "../node-require.js";
 
 export function adaptRedisV5(client: RedisClientType): RedisClientLike {
   return client as unknown as RedisClientLike;
@@ -23,7 +24,7 @@ export function createRedisV5Client(
   // We do `require` instead of `await import` here because the parent
   // `buildClient` is already in an async context that handles awaiting.
    
-  const { createClient } = require("redis") as typeof import("redis");
+  const { createClient } = nodeRequire("redis") as typeof import("redis");
   const useTls = config.tls ?? config.url.startsWith("rediss://");
 
   // redis@5 has a discriminated socket union (TCP / TLS / IPC) and disallows
