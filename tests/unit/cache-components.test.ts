@@ -190,14 +190,18 @@ describe("cacheHandlers — build phase skip (PR #207 regression)", () => {
 });
 
 describe("cacheHandlers — soft tag freshness (spec §2.3)", () => {
-  it("get() returns undefined when a soft tag was invalidated after entry timestamp", async () => {
-    const { handler } = setup();
+  it("serves the entry as STALE (SWR) when a soft tag was invalidated after entry timestamp", async () => {
+    const { handler, events } = setup();
     await handler.set("k", Promise.resolve(makeEntry()));
     // Simulate revalidatePath('/blog') firing after the entry was written.
+    // Soft invalidation is stale-while-revalidate per spec §2.3#updateTags;
+    // Next additionally hard-discards implicit tags via getExpiration, so
+    // serving stale here is defense in depth, not user-visible staleness.
     vi.setSystemTime(new Date(T0 + 10));
     await handler.updateTags(["_N_T_/blog"]);
     const got = await handler.get("k", ["_N_T_/blog"]);
-    expect(got).toBeUndefined();
+    expect(got).toBeDefined();
+    expect(events.some((e) => e.type === "cache.stale")).toBe(true);
   });
 
   it("get() still returns entry when soft tag invalidation predates the entry", async () => {
@@ -211,6 +215,88 @@ describe("cacheHandlers — soft tag freshness (spec §2.3)", () => {
     );
     const got = await handler.get("k", ["_N_T_/old"]);
     expect(got).toBeDefined();
+  });
+});
+
+describe("cacheHandlers — explicit tag soft revalidation (#1 regression)", () => {
+  it("serves the entry as STALE (SWR) after a soft revalidateTag of an explicit tag", async () => {
+    const { handler, events } = setup();
+    // Entry carries explicit tag "posts" (via cacheTag) and is time-fresh.
+    await handler.set(
+      "k",
+      Promise.resolve(
+        makeEntry({ tags: ["posts"], revalidate: 60, expire: 86400 })
+      )
+    );
+
+    // revalidateTag("posts", "max") → updateTags(["posts"]) with no expire: 0.
+    vi.setSystemTime(new Date(T0 + 10));
+    await handler.updateTags(["posts"]);
+
+    // Next reads with NO soft tags (explicit tags are not soft tags). The
+    // entry must be SERVED (not a miss) but classified stale for refresh.
+    const got = await handler.get("k", []);
+    expect(got).toBeDefined();
+    expect(events.some((e) => e.type === "cache.stale")).toBe(true);
+    expect(events.some((e) => e.type === "cache.miss")).toBe(false);
+
+    // Returned timestamp is backdated past `revalidate` (within `expire`) so
+    // Next schedules the background refresh — true SWR, not a blocking miss.
+    const ageMs = Date.now() - got!.timestamp;
+    expect(ageMs).toBeGreaterThan(got!.revalidate * 1000);
+    expect(ageMs).toBeLessThanOrEqual(got!.expire * 1000);
+  });
+
+  it("treats a soft explicit-tag invalidation as a miss when SWR is disabled", async () => {
+    const events: MetricEvent[] = [];
+    const client = new MockRedisClient();
+    client.isOpen = true;
+    const handler = createCacheComponentsHandler({
+      client: () => client,
+      abortTimeoutMs: 100,
+      staleWhileRevalidate: false,
+      onMetric: (e) => events.push(e),
+    });
+    await handler.set("k", Promise.resolve(makeEntry({ tags: ["posts"] })));
+    vi.setSystemTime(new Date(T0 + 10));
+    await handler.updateTags(["posts"]);
+    const got = await handler.get("k", []);
+    expect(got).toBeUndefined();
+  });
+
+  it("still serves the entry fresh when the explicit-tag invalidation predates it", async () => {
+    const { handler, events } = setup();
+    vi.setSystemTime(new Date(T0));
+    await handler.updateTags(["posts"]);
+    vi.setSystemTime(new Date(T0 + 1_000));
+    await handler.set(
+      "k",
+      Promise.resolve(makeEntry({ tags: ["posts"], timestamp: T0 + 1_000 }))
+    );
+    const got = await handler.get("k", []);
+    expect(got).toBeDefined();
+    expect(events.some((e) => e.type === "cache.hit")).toBe(true);
+  });
+
+  it("cross-instance: instance B observes A's soft invalidation after refreshTags", async () => {
+    const client = new MockRedisClient();
+    client.isOpen = true;
+    const eventsB: MetricEvent[] = [];
+    const a = createCacheComponentsHandler({ client: () => client, abortTimeoutMs: 100 });
+    const b = createCacheComponentsHandler({
+      client: () => client,
+      abortTimeoutMs: 100,
+      onMetric: (e) => eventsB.push(e),
+    });
+
+    await a.set("k", Promise.resolve(makeEntry({ tags: ["posts"] })));
+    vi.setSystemTime(new Date(T0 + 10));
+    await a.updateTags(["posts"]); // writes the shared marker
+
+    await b.refreshTags(); // B pulls the marker from Redis
+    const got = await b.get("k", []);
+    expect(got).toBeDefined();
+    expect(eventsB.some((e) => e.type === "cache.stale")).toBe(true);
   });
 });
 

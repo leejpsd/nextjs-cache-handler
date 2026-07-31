@@ -341,27 +341,49 @@ async function getImpl(
     return undefined;
   }
 
-  // Soft-tag freshness check. Per spec §2.3#get, an entry is stale if any
-  // soft tag was invalidated after entry.timestamp.
-  if (softTags.length > 0) {
+  // Tag freshness check. An entry is stale if ANY of its tags was invalidated
+  // after entry.timestamp. Two tag sources must be considered:
+  //   1. softTags — implicit route tags Next passes in (revalidatePath). Next
+  //      also enforces these itself via getExpiration(implicitTags), so this
+  //      handler-side check is defense in depth.
+  //   2. envelope.tags — explicit tags carried on the entry via cacheTag().
+  //      Next does NOT consult the handler for these across requests (it only
+  //      checks the current action's pending/previous tags), so cross-request
+  //      soft invalidation — revalidateTag(tag, "max") — is entirely the
+  //      handler's job here. Checking only softTags made that a no-op (#1).
+  const freshnessTags =
+    softTags.length > 0 ? [...softTags, ...envelope.tags] : envelope.tags;
+  let tagStale = false;
+  if (freshnessTags.length > 0) {
     let mostRecent = 0;
-    for (const t of softTags) {
+    for (const t of freshnessTags) {
       const ts = state.localTagTimestamps.get(t);
       if (ts !== undefined && ts > mostRecent) mostRecent = ts;
     }
     if (mostRecent > envelope.timestamp) {
-      state.emit({
-        type: "cache.miss",
-        meta: { reason: "soft-tag-invalidated" },
-      });
-      return undefined;
+      // Soft invalidation is stale-while-revalidate per spec §2.3#updateTags
+      // ("entries can stay; subsequent reads treat them as stale"): keep
+      // serving the entry but classify it stale so it flows through the
+      // background-refresh path below. Only when SWR is disabled (or the
+      // entry is already hard-expired) do we degrade to a miss.
+      if (state.opts.staleWhileRevalidate && partition.freshness !== "expired") {
+        tagStale = true;
+      } else {
+        state.emit({ type: "cache.miss", meta: { reason: "tag-invalidated" } });
+        return undefined;
+      }
     }
   }
+
+  const freshness = tagStale ? "stale" : partition.freshness;
 
   // For stale entries, try the single-flight refresh lock so only one
   // instance triggers the background refresh (when the option is on).
   // The lock outcome is purely informational — we always serve the entry.
-  if (partition.freshness === "stale") {
+  if (freshness === "stale") {
+    const staleMeta = tagStale
+      ? { freshness, reason: "tag-invalidated" }
+      : { freshness };
     if (state.opts.singleFlight) {
       const isLeader = await tryAcquireRefreshLock(state, cacheKey);
       state.emit({
@@ -369,29 +391,39 @@ async function getImpl(
           ? "cache.stale.refresh.leader"
           : "cache.stale.refresh.follower",
         ms: Date.now() - start,
-        meta: { freshness: partition.freshness },
+        meta: staleMeta,
       });
     } else {
       state.emit({
         type: "cache.stale",
         ms: Date.now() - start,
-        meta: { freshness: partition.freshness },
+        meta: staleMeta,
       });
     }
   } else {
     state.emit({
       type: "cache.hit",
       ms: Date.now() - start,
-      meta: { freshness: partition.freshness },
+      meta: { freshness },
     });
   }
+
+  // When stale because of a tag invalidation (not time), present the entry as
+  // just past its `revalidate` boundary so Next serves it immediately AND
+  // schedules a background re-render (true SWR). Time-stale entries already
+  // satisfy this through their real timestamp. The Math.min guard never makes
+  // an entry look fresher than it actually is.
+  const revalidateMs = Math.max(0, envelope.revalidate) * 1000;
+  const outTimestamp = tagStale
+    ? Math.min(envelope.timestamp, Date.now() - revalidateMs - 1)
+    : envelope.timestamp;
 
   // Reconstruct stream and return.
   return {
     value: bufferToStream(Buffer.from(envelope.value, "base64")),
     tags: envelope.tags,
     stale: envelope.stale,
-    timestamp: envelope.timestamp,
+    timestamp: outTimestamp,
     expire: envelope.expire,
     revalidate: envelope.revalidate,
   };
