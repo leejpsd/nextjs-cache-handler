@@ -126,6 +126,74 @@ describe("incremental cacheHandler — basic ISR round-trip", () => {
   });
 });
 
+describe("incremental cacheHandler — Next 15 ctx compatibility", () => {
+  it("ctx.revalidate (Next 15 shape, no cacheControl) drives the Redis TTL", async () => {
+    const { Handler, client } = setup();
+    const h = new Handler();
+    const setSpy = vi.spyOn(client, "set");
+
+    await h.set(
+      "/blog",
+      { kind: "APP_PAGE", body: Buffer.from("x"), headers: {} },
+      { kindHint: "app", revalidate: 300 }
+    );
+
+    expect(setSpy).toHaveBeenCalledWith(expect.any(String), expect.any(String), {
+      EX: 300,
+    });
+  });
+
+  it("Next 16 cacheControl.revalidate wins over a Next 15 ctx.revalidate", async () => {
+    const { Handler, client } = setup();
+    const h = new Handler();
+    const setSpy = vi.spyOn(client, "set");
+
+    await h.set(
+      "/blog",
+      { kind: "APP_PAGE", body: Buffer.from("x"), headers: {} },
+      { cacheControl: { revalidate: 120 }, revalidate: 300 }
+    );
+
+    expect(setSpy).toHaveBeenCalledWith(expect.any(String), expect.any(String), {
+      EX: 120,
+    });
+  });
+
+  it("kindHint 'fetch' (Next 15) observes soft tag staleness", async () => {
+    const { Handler } = setup();
+    const h = new Handler();
+    await h.set(
+      "/data",
+      { kind: "FETCH", tags: ["feed"], data: { body: "x" } } as never,
+      { kindHint: "fetch", revalidate: 60 }
+    );
+
+    await h.revalidateTag("feed", {}); // soft: stale-only tag state
+
+    const out = await h.get("/data", { kindHint: "fetch", tags: ["feed"] });
+    expect(out).toBeNull();
+  });
+
+  it("soft tag staleness leaves non-fetch pages intact (Next 15 shape)", async () => {
+    const { Handler } = setup();
+    const h = new Handler();
+    await h.set(
+      "/page",
+      {
+        kind: "APP_PAGE",
+        body: Buffer.from("x"),
+        headers: { "x-next-cache-tags": "feed" },
+      },
+      { kindHint: "app", revalidate: 60 }
+    );
+
+    await h.revalidateTag("feed", {});
+
+    const out = await h.get("/page", { kindHint: "app" });
+    expect(out).not.toBeNull();
+  });
+});
+
 describe("incremental cacheHandler — request-scoped read deduplication", () => {
   const body = {
     kind: "APP_PAGE",

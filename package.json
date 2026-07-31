@@ -141,7 +141,7 @@
     "prepublishOnly": "npm run verify && npm run publint && npm run attw"
   },
   "peerDependencies": {
-    "next": ">=16.1.5 <17",
+    "next": ">=15.0.0 <17",
     "redis": ">=5.0.0",
     "ioredis": ">=5.0.0"
   },

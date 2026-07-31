@@ -48,10 +48,15 @@ const DEFAULT_ABORT_MS = 1500;
 
 export interface IncrementalCtx {
   kind?: string;
+  /** Next 15 passes a lowercase kind hint ("fetch" | "app" | "pages"). */
+  kindHint?: string;
   tags?: string[];
   softTags?: string[];
   revalidatedTags?: string[];
+  /** Next 16 shape. */
   cacheControl?: { revalidate?: number | false };
+  /** Next 15 shape — revalidate sits directly on the ctx. */
+  revalidate?: number | false;
   fetchCache?: boolean;
 }
 
@@ -207,7 +212,8 @@ function normalizeTtlSeconds(
       return ONE_YEAR_SEC;
     }
   }
-  const revalidate = ctx?.cacheControl?.revalidate;
+  // Next 16 nests revalidate under cacheControl; Next 15 passes it directly.
+  const revalidate = ctx?.cacheControl?.revalidate ?? ctx?.revalidate;
   if (revalidate === false || revalidate === undefined) return ONE_YEAR_SEC;
   if (typeof revalidate === "number" && revalidate > 0) {
     return Math.min(Math.max(Math.ceil(revalidate), MIN_TTL_SEC), ONE_YEAR_SEC);
@@ -340,7 +346,14 @@ export class IncrementalRedisCacheHandler {
       }
 
       const tagStates = await readTagStates(this.state, tags);
-      const isFetch = ctx?.kind === "FETCH";
+      // Next 16 sends kind: "FETCH"; Next 15 sends kindHint: "fetch". The
+      // stored value's own kind covers entries read without a hint.
+      const isFetch =
+        ctx?.kind === "FETCH" ||
+        ctx?.kindHint?.toLowerCase() === "fetch" ||
+        (typeof parsed.value === "object" &&
+          parsed.value !== null &&
+          (parsed.value as { kind?: string }).kind === "FETCH");
       if (tagStates.some((s) => isTagStateExpired(s, parsed.lastModified, isFetch))) {
         this.state.emit({ type: "cache.miss", meta: { reason: "tag-state-expired" } });
         return null;

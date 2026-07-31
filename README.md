@@ -337,7 +337,12 @@ eventual implementation should converge on the same behavior.
 
 ## Compatibility
 
-- **Next.js**: `>=16.1.5 <17`
+- **Next.js**: `>=15.0.0 <17`
+  - `cacheHandler` (singular, ISR): Next **15 and 16** — the handler accepts
+    both ctx shapes (Next 15's `ctx.revalidate` / `kindHint`, Next 16's
+    `ctx.cacheControl` / `kind`)
+  - `cacheHandlers` (plural, `'use cache'`): Next **>=16.1.5** only — the
+    interface does not exist before 16
 - **Node.js**: `>=20`
 - **redis**: `>=5.0.0` (peer, optional)
 - **ioredis**: `>=5.0.0` (peer, optional)
