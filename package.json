@@ -1,7 +1,7 @@
 {
   "name": "@leejpsd/nextjs-cache-handler",
   "version": "0.3.0",
-  "description": "The only Redis cache handler for Next.js 16 that ships both cacheHandler (ISR) and cacheHandlers ('use cache') — production-validated for multi-instance deployments where @fortedigital lists 'Help needed'.",
+  "description": "Redis cache handler for Next.js 15/16 \u2014 the only one shipping both cacheHandler (ISR) and cacheHandlers ('use cache') with built-in compression, Redis Sentinel, and OpenTelemetry. Production-validated on multi-instance AWS: reconnect backoff, cross-instance tag invalidation, zero-downtime Redis failover.",
   "keywords": [
     "next",
     "nextjs",
@@ -15,7 +15,12 @@
     "ioredis",
     "ISR",
     "self-hosting",
-    "multi-instance"
+    "multi-instance",
+    "next-15",
+    "sentinel",
+    "compression",
+    "opentelemetry",
+    "swr"
   ],
   "license": "MIT",
   "author": "Eddy Lee <leejpsd@gmail.com>",
