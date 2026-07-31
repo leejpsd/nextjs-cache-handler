@@ -3,17 +3,20 @@
 [![npm](https://img.shields.io/npm/v/@leejpsd/nextjs-cache-handler.svg)](https://www.npmjs.com/package/@leejpsd/nextjs-cache-handler)
 [![license](https://img.shields.io/npm/l/@leejpsd/nextjs-cache-handler.svg)](./LICENSE)
 
-> **`v0.2.0`** — install with
+> **`v0.3.0`** — install with
 > `npm install @leejpsd/nextjs-cache-handler`. Production-validated against
-> AWS ECS Fargate with multi-instance Redis (24h live-traffic soak: 0
-> errors, 0 leaks, 2ms Redis ping, namespace isolation working).
+> AWS ECS Fargate with multi-instance Redis (v0.1: 24h live-traffic soak;
+> v0.3: fresh multi-instance verification incl. a live Redis-reboot drill
+> with zero 5xx — see
+> [`docs/staging-verification-2026-08-01.md`](./docs/staging-verification-2026-08-01.md)).
 >
-> v0.2 adds: optional **single-flight refresh lock** for cache-stampede
-> protection at the SWR boundary, a reference **OpenTelemetry** wrapper,
-> and **integration tests** (21 scenarios) running against real Redis 7
-> over both `redis@5` and `ioredis` adapters.
+> v0.3 adds: **Next.js 15 support** (ISR handler), **reconnect with
+> exponential backoff** (no more permanent memory-only latch), **request-scoped
+> GET deduplication**, transparent **gzip/brotli compression**, **Redis
+> Sentinel** support, a built-in **OpenTelemetry emitter** at `/otel`, and an
+> LRU-bounded memory fallback.
 
-The Redis cache handler for **Next.js 16** that ships **both** `cacheHandler`
+The Redis cache handler for **Next.js 15/16** that ships **both** `cacheHandler`
 (ISR / Pages Router) **and** `cacheHandlers` (`'use cache'` directive,
 `cacheComponents: true`) — the area where
 [`@fortedigital/nextjs-cache-handler`](https://github.com/fortedigital/nextjs-cache-handler)
@@ -54,14 +57,15 @@ As of 2026-05, the leading OSS Redis handler `@fortedigital/nextjs-cache-handler
 declares `peerDependencies.next: ">=16.1.5"` but the README marks the new
 plural interface as ❌ **"Not yet supported - Help needed"**:
 
-> 📅 **Compatibility matrix verified 2026-05-10.** The OSS Next.js cache
+> 📅 **Compatibility matrix re-verified 2026-07-31** (from each project's
+> published README/registry metadata). The OSS Next.js cache
 > handler ecosystem moves quickly — please verify
 > [`@fortedigital`](https://github.com/fortedigital/nextjs-cache-handler#compatibility)
 > and
 > [`nextjs-turbo-redis-cache`](https://github.com/trieb-work/nextjs-turbo-redis-cache#features)
 > directly before relying on this comparison.
 
-| Next 16 feature | this | @fortedigital 3.2.0 | nextjs-turbo-redis-cache 1.13 |
+| Feature | this (0.3.0) | @fortedigital 3.2.1 | nextjs-turbo-redis-cache 1.15 |
 |---|---|---|---|
 | `cacheHandlers` config (plural) | ✅ | ❌ Help needed | ✅ since 1.11 |
 | `'use cache'` directive | ✅ | ❌ Help needed | ✅ since 1.11 |
@@ -75,13 +79,17 @@ plural interface as ❌ **"Not yet supported - Help needed"**:
 | Redis Cluster | ✅ (cluster adapter, see Production checklist) | ✅ | ✅ |
 | ioredis support | ✅ | ✅ | ✅ |
 | In-memory fallback (TTL-aware) | ✅ | partial | ✅ L1 + Redis L2 |
-| OpenTelemetry hook | ✅ `onMetric` | ❌ | ❌ |
+| Next 15 support (ISR handler) | ✅ `>=15.0.0` | ✅ (legacy 2.x line) | ✅ `>=15.0.3` |
+| Request-scoped GET dedup | ✅ | ❌ | ✅ |
+| Built-in value compression | ✅ gzip/brotli option | example only | example only |
+| Redis Sentinel | ✅ (local failover drill) | ❌ | ❌ |
+| OpenTelemetry | ✅ built-in `/otel` emitter + `onMetric` hook | ❌ | ❌ |
+| Reconnect strategy | ✅ exponential backoff | client-level | error-threshold restart |
 | Live-traffic dogfood (24h+) | ✅ AWS ECS Fargate | not published | not published |
 
 PR [#207](https://github.com/fortedigital/nextjs-cache-handler/pull/207) on
-`@fortedigital` has been stalled for 3+ months on the same issue: the
-upstream review insisted on `PHASE_PRODUCTION_BUILD` handling, which this
-package has from the start.
+`@fortedigital` (their `cacheHandlers` attempt) was held up in review over
+`PHASE_PRODUCTION_BUILD` handling — which this package has from the start.
 
 ---
 
@@ -238,8 +246,9 @@ Full reference: [`docs/api.md`](./docs/api.md).
 | **Self-hosted Redis 7+** | `{ type: "redis", url }` or `{ type: "ioredis", url }` | ✅ AWS ElastiCache 24h soak |
 | **Redis Cluster** | `{ type: "cluster", nodes }` + `hashTag: true` | unit-tested, not yet load-tested at scale |
 | **Upstash Redis** | `{ type: "redis", url: "rediss://..." }` (TLS auto-detected) | not yet validated, expected to work via the standard Redis protocol |
-| **AWS ElastiCache (replication group)** | `{ type: "redis", url: "rediss://..." }` | ✅ reference deployment |
-| **Vercel KV** | not yet supported — `@vercel/kv` adapter ships in v0.3 | — |
+| **AWS ElastiCache (replication group)** | `{ type: "redis", url: "rediss://..." }` | ✅ reference deployment (re-verified 2026-08-01, Seoul) |
+| **Redis Sentinel** | `{ type: "sentinel", sentinels, name }` | ✅ local master/replica failover drill |
+| **Vercel KV** | not yet supported — dedicated adapter on the roadmap | — |
 | **DragonflyDB / KeyDB** | Redis-protocol compatible — `{ type: "redis", url }` should work | not validated |
 
 ---
@@ -367,10 +376,13 @@ ESM and CJS dual-published, full TypeScript types, validated via
   metrics, OpenTelemetry reference adapter, integration tests against
   real Redis 7 (21 scenarios over `redis@5` + `ioredis`), GitHub Actions
   OIDC publish path with provenance attestation ✅
-- **v0.3.0** — Vercel KV / Upstash Redis adapter, `'use cache: remote'`
-  multi-tier setup, Redis Cluster load testing
-- **v0.4.0** — Cache stampede protection beyond single-flight,
-  request-scoped memoization
+- **v0.3.0** *(2026-08)* — Next.js 15 ISR support, reconnect backoff (no
+  permanent connect-failure latch), request-scoped GET deduplication,
+  gzip/brotli compression, Redis Sentinel, built-in OpenTelemetry emitter
+  (`/otel`), LRU-bounded memory fallback, ESM peer-loading fixes ✅
+- **v0.4.0** — Build-phase cache seeding (prepopulate prebuilt pages),
+  pub/sub-based tag propagation, Redis Cluster e2e validation, Vercel KV /
+  Upstash adapter, `'use cache: remote'` multi-tier setup
 
 ---
 
