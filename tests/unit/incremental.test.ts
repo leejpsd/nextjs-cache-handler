@@ -126,6 +126,86 @@ describe("incremental cacheHandler — basic ISR round-trip", () => {
   });
 });
 
+describe("incremental cacheHandler — soft tag SWR for route entries (#1 outer layer)", () => {
+  it("backdates lastModified after a soft revalidateTag so Next regenerates in background", async () => {
+    const { Handler } = setup();
+    const h = new Handler();
+    await h.set(
+      "/page",
+      {
+        kind: "APP_PAGE",
+        body: Buffer.from("html"),
+        headers: { "x-next-cache-tags": "soft-probe" },
+      },
+      { kind: "APP_PAGE", cacheControl: { revalidate: 300 } }
+    );
+
+    vi.setSystemTime(new Date(T0 + 10));
+    await h.revalidateTag("soft-probe", {}); // soft: stale-only tag state
+
+    h.resetRequestCache();
+    const out = await h.get("/page", { kind: "APP_PAGE" });
+    // Entry is SERVED (not null — that would be a blocking miss)...
+    expect(out).not.toBeNull();
+    // ...aged just past ITS OWN revalidate window (300s) — far enough for
+    // Next to schedule a background regen, near enough to stay inside the
+    // route's expire window (backdating a year would cross expire and turn
+    // SWR into a blocking re-render).
+    expect(out!.lastModified).toBe(T0 + 10 - 301 * 1000);
+  });
+
+  it("degrades to a blocking miss when the entry has no SWR window (revalidate: false)", async () => {
+    const { Handler } = setup();
+    const h = new Handler();
+    await h.set(
+      "/page",
+      { kind: "APP_PAGE", body: Buffer.from("html"), headers: { "x-next-cache-tags": "soft-probe" } },
+      { kind: "APP_PAGE" } // no revalidate → ONE_YEAR sentinel, no SWR window
+    );
+    vi.setSystemTime(new Date(T0 + 10));
+    await h.revalidateTag("soft-probe", {});
+    h.resetRequestCache();
+    expect(await h.get("/page", { kind: "APP_PAGE" })).toBeNull();
+  });
+
+  it("a fresh regeneration after the soft invalidation serves normally again", async () => {
+    const { Handler } = setup();
+    const h = new Handler();
+    await h.set(
+      "/page",
+      { kind: "APP_PAGE", body: Buffer.from("v1"), headers: { "x-next-cache-tags": "soft-probe" } },
+      { kind: "APP_PAGE", cacheControl: { revalidate: 300 } }
+    );
+    vi.setSystemTime(new Date(T0 + 10));
+    await h.revalidateTag("soft-probe", {});
+    // Background regeneration writes a new entry AFTER the invalidation.
+    vi.setSystemTime(new Date(T0 + 5_000));
+    await h.set(
+      "/page",
+      { kind: "APP_PAGE", body: Buffer.from("v2"), headers: { "x-next-cache-tags": "soft-probe" } },
+      { kind: "APP_PAGE", cacheControl: { revalidate: 300 } }
+    );
+    h.resetRequestCache();
+    const out = await h.get("/page", { kind: "APP_PAGE" });
+    expect(out).not.toBeNull();
+    expect(out!.lastModified).toBe(T0 + 5_000); // NOT backdated anymore
+  });
+
+  it("hard revalidateTag still yields a blocking miss", async () => {
+    const { Handler } = setup();
+    const h = new Handler();
+    await h.set(
+      "/page",
+      { kind: "APP_PAGE", body: Buffer.from("html"), headers: { "x-next-cache-tags": "soft-probe" } },
+      { kind: "APP_PAGE" }
+    );
+    vi.setSystemTime(new Date(T0 + 10));
+    await h.revalidateTag("soft-probe"); // no durations → hard ({expired})
+    h.resetRequestCache();
+    expect(await h.get("/page", { kind: "APP_PAGE" })).toBeNull();
+  });
+});
+
 describe("incremental cacheHandler — Next 15 ctx compatibility", () => {
   it("ctx.revalidate (Next 15 shape, no cacheControl) drives the Redis TTL", async () => {
     const { Handler, client } = setup();

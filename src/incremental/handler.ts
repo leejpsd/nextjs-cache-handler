@@ -64,6 +64,9 @@ export interface IncrementalCtx {
 interface CacheRecord {
   lastModified: number;
   value: IncrementalCacheData["value"];
+  /** Route/entry revalidate window (seconds) captured at set() time — lets
+   *  get() compute a precise SWR backdate for soft tag invalidations. */
+  revalidateSec?: number;
 }
 
 interface TagState {
@@ -362,8 +365,48 @@ export class IncrementalRedisCacheHandler {
         return null;
       }
 
+      // Soft (SWR) tag invalidation for non-fetch entries: a route's HTML must
+      // not keep serving as FRESH after revalidateTag(tag, "max") — but it
+      // shouldn't block either. Backdate lastModified just past the entry's
+      // own revalidate window (captured at set() time) so Next serves it
+      // stale and regenerates in the background — which also re-executes any
+      // 'use cache' functions inside the route (the outer-layer half of #1;
+      // fetch entries already treat `stale` as expired above). Backdating
+      // further would cross the route's `expire` and turn SWR into a
+      // blocking re-render.
+      let lastModified = parsed.lastModified;
+      if (!isFetch && typeof lastModified === "number") {
+        const softTs = Math.max(
+          0,
+          ...tagStates.map((s) =>
+            s && typeof s.stale === "number" ? s.stale : 0
+          )
+        );
+        if (softTs >= lastModified) {
+          const rev = parsed.revalidateSec;
+          if (typeof rev !== "number" || rev <= 0 || rev >= ONE_YEAR_SEC) {
+            // No usable SWR window (revalidate: false, or a pre-upgrade
+            // record without revalidateSec) — degrade to a blocking miss so
+            // the invalidation still takes effect.
+            this.state.emit({
+              type: "cache.miss",
+              meta: { reason: "tag-invalidated" },
+            });
+            return null;
+          }
+          lastModified = Math.min(
+            lastModified,
+            Date.now() - (rev + 1) * 1000
+          );
+          this.state.emit({
+            type: "cache.stale",
+            meta: { reason: "tag-invalidated" },
+          });
+        }
+      }
+
       this.state.emit({ type: "cache.hit" });
-      return { ...parsed, tags };
+      return { ...parsed, lastModified, tags };
     } catch (err) {
       this.state.logger.error("get() unexpected error", {
         message: (err as Error).message,
@@ -382,7 +425,11 @@ export class IncrementalRedisCacheHandler {
       const tags = extractTagsFromValue(data, ctx);
       const useLocal = shouldUseLocalIncrementalStore(tags);
       const ttl = normalizeTtlSeconds(data, ctx);
-      const record: CacheRecord = { lastModified: Date.now(), value: data };
+      const record: CacheRecord = {
+        lastModified: Date.now(),
+        value: data,
+        revalidateSec: ttl,
+      };
       const serialized = serializeCacheRecord(record);
       const eKey = entryKey(this.state, cacheKey);
       // The stored value changes — a memoized read (including a memoized
