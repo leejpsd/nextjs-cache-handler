@@ -9,5 +9,21 @@
  * provides an `import.meta.url` polyfill for the CJS build.
  */
 import { createRequire } from "node:module";
+import path from "node:path";
 
-export const nodeRequire: NodeJS.Require = createRequire(import.meta.url);
+const packageRequire = createRequire(import.meta.url);
+const cwdRequire = createRequire(
+  path.join(process.cwd(), "__resolve-anchor__.js")
+);
+
+export function nodeRequire(id: string): unknown {
+  try {
+    return packageRequire(id);
+  } catch {
+    // Symlinked installs (npm i <local-path>, pnpm's virtual store) resolve
+    // import.meta.url to the package's REAL location, outside the app tree —
+    // so peers installed by the app aren't reachable from that anchor. Retry
+    // from the process CWD, which under a Next.js server is the app root.
+    return cwdRequire(id);
+  }
+}
