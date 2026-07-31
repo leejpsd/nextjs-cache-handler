@@ -16,6 +16,7 @@
  */
 
 import { CacheTimeoutError, withAbortSignal } from "../shared/abort.js";
+import { compressValue, decompressValue } from "../shared/compress.js";
 import { ConnectionManager } from "../shared/client/index.js";
 import { defaultLogger } from "../shared/logger.js";
 import { MemoryStore } from "../shared/memory-fallback.js";
@@ -291,7 +292,9 @@ export class IncrementalRedisCacheHandler {
       async () => {
         const client = await this.state.conn.getOrConnect();
         if (!client) return null;
-        return await client.get(eKey);
+        // Decompress inside the memoized promise so deduped callers don't
+        // repeat the CPU work. Corrupt data rejects → miss via the catch.
+        return await decompressValue(await client.get(eKey));
       }
     ).catch((err: unknown) => {
       if (err instanceof CacheTimeoutError) {
@@ -403,7 +406,15 @@ export class IncrementalRedisCacheHandler {
                 }
                 return;
               }
-              await client.set(eKey, serialized, { EX: ttl });
+              // Compress only the Redis-bound copy; memory stays plain.
+              await client.set(
+                eKey,
+                await compressValue(
+                  serialized,
+                  this.state.opts.rest.compression
+                ),
+                { EX: ttl }
+              );
             }
           );
           this.state.emit({ type: "cache.set", meta: { backend: "redis" } });

@@ -235,6 +235,76 @@ describe("cacheHandlers — getExpiration (spec §2.3)", () => {
   });
 });
 
+describe("cacheHandlers — transparent compression", () => {
+  const bigBody = "The quick brown fox jumps over the lazy dog. ".repeat(200);
+
+  function setupCompressed(compression?: "gzip" | "brotli") {
+    const client = new MockRedisClient();
+    client.isOpen = true;
+    const make = (c?: "gzip" | "brotli") =>
+      createCacheComponentsHandler({
+        client: () => client,
+        abortTimeoutMs: 100,
+        ...(c ? { compression: c } : {}),
+      });
+    return { client, handler: make(compression), make };
+  }
+
+  it("stores the entry compressed in Redis and round-trips it", async () => {
+    const { handler, client } = setupCompressed("gzip");
+    await handler.set(
+      "big",
+      Promise.resolve(
+        makeEntry({ value: bufferToStream(Buffer.from(bigBody)), tags: [] })
+      )
+    );
+
+    const entryRedisKey = [...client.kv.keys()].find((k) =>
+      k.includes("entry:")
+    );
+    const stored = client.kv.get(entryRedisKey!)!;
+    expect(stored.startsWith("__ncgz__:")).toBe(true);
+    expect(stored.length).toBeLessThan(bigBody.length);
+
+    const got = await handler.get("big", []);
+    expect(got).toBeDefined();
+    const buf = await readStreamFully(got!.value);
+    expect(buf.toString("utf8")).toBe(bigBody);
+  });
+
+  it("a handler without compression reads entries written with it (mixed fleet)", async () => {
+    const { make } = setupCompressed();
+    const writer = make("brotli");
+    const reader = make();
+    await writer.set(
+      "big",
+      Promise.resolve(
+        makeEntry({ value: bufferToStream(Buffer.from(bigBody)), tags: [] })
+      )
+    );
+
+    const got = await reader.get("big", []);
+    expect(got).toBeDefined();
+    const buf = await readStreamFully(got!.value);
+    expect(buf.toString("utf8")).toBe(bigBody);
+  });
+
+  it("a compressing handler reads plain entries written before enabling it", async () => {
+    const { make } = setupCompressed();
+    const plainWriter = make();
+    const gzipReader = make("gzip");
+    await plainWriter.set(
+      "old",
+      Promise.resolve(
+        makeEntry({ value: bufferToStream(Buffer.from(bigBody)), tags: [] })
+      )
+    );
+
+    const got = await gzipReader.get("old", []);
+    expect(got).toBeDefined();
+  });
+});
+
 describe("cacheHandlers — updateTags fan-out (pipelining regression)", () => {
   it("many tags complete within one command latency, not N sequential round trips", async () => {
     // 20 tags × 30ms per command would take 600ms sequentially and trip the

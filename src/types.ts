@@ -181,6 +181,14 @@ export interface CacheHandlerOptions {
   memoryMaxEntries?: number;
 
   /**
+   * Compress entry values before writing them to Redis (node:zlib, no added
+   * dependencies). Reads always auto-detect: entries written with a different
+   * setting (or none) stay readable, so this can be enabled or switched on a
+   * live cache. Payloads under 1 KiB are stored uncompressed. Default: off.
+   */
+  compression?: "gzip" | "brotli";
+
+  /**
    * Whether to keep returning a stale entry in the SWR window
    * (`revalidate < age < expire`) while Next.js triggers a background refresh.
    *

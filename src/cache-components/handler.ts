@@ -15,6 +15,7 @@
  */
 
 import { CacheTimeoutError, withAbortSignal } from "../shared/abort.js";
+import { compressValue, decompressValue } from "../shared/compress.js";
 import { ConnectionManager } from "../shared/client/index.js";
 import { defaultLogger } from "../shared/logger.js";
 import { execLuaScript } from "../shared/lua/index.js";
@@ -300,7 +301,14 @@ async function getImpl(
     return undefined;
   }
 
-  envelope = decodeEnvelope(raw);
+  try {
+    raw = await decompressValue(raw);
+  } catch {
+    state.emit({ type: "cache.miss", meta: { reason: "decode-error" } });
+    return undefined;
+  }
+
+  envelope = decodeEnvelope(raw as string);
   if (!envelope) {
     state.emit({ type: "cache.miss", meta: { reason: "decode-error" } });
     return undefined;
@@ -457,11 +465,17 @@ async function setImpl(
           }
           return;
         }
+        // Compress only the Redis-bound copy — the memory fallback keeps the
+        // plain payload (local reads shouldn't pay decompress CPU).
+        const wirePayload = await compressValue(
+          payload,
+          state.opts.rest.compression
+        );
         if (entry.tags.length === 0) {
           // No tags → simple SET.
-          await client.set(eKey, payload, { EX: ttl });
+          await client.set(eKey, wirePayload, { EX: ttl });
         } else {
-          await luaSetWithTags(client, state, eKey, payload, ttl, entry.tags);
+          await luaSetWithTags(client, state, eKey, wirePayload, ttl, entry.tags);
         }
       }
     );
