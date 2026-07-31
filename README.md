@@ -16,6 +16,23 @@
 > Sentinel** support, a built-in **OpenTelemetry emitter** at `/otel`, and an
 > LRU-bounded memory fallback.
 
+## 🤖 For AI agents
+
+Working with Claude Code / Codex / Cursor? Give your agent this URL and it
+will install and wire everything (version detection, wrapper files,
+next.config patch, verification):
+
+```
+https://raw.githubusercontent.com/leejpsd/nextjs-cache-handler/main/setup-instructions/setup.md
+```
+
+An agent skill with decision tables, invalidation semantics, and a
+troubleshooting playbook ships in the package (`AGENTS.md`,
+`skills/nextjs-redis-cache/SKILL.md`) and via
+`npx skills add leejpsd/nextjs-cache-handler`.
+
+---
+
 The Redis cache handler for **Next.js 15/16** that ships **both** `cacheHandler`
 (ISR / Pages Router) **and** `cacheHandlers` (`'use cache'` directive,
 `cacheComponents: true`) — the area where

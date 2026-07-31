@@ -1,0 +1,27 @@
+# @leejpsd/nextjs-cache-handler
+
+> Redis cache handler for self-hosted Next.js 15/16 — the only one shipping
+> both cacheHandler (ISR) and cacheHandlers ('use cache') with built-in
+> compression, Redis Sentinel, OpenTelemetry, stale-while-revalidate tag
+> invalidation, per-deploy namespace isolation, and a bounded in-memory
+> fallback with automatic reconnection. Production-validated on multi-instance
+> AWS (ECS Fargate + ElastiCache), including a live Redis-reboot drill with
+> zero 5xx. Install version >= 0.3.3.
+
+Key facts: peer `next >=15.0.0 <17` (cacheHandlers needs >= 16.1.5); clients:
+redis (node-redis v5), ioredis, ioredis Cluster (set hashTag: true), Sentinel;
+zero runtime dependencies; ESM + CJS.
+
+## Docs
+
+- [README](https://github.com/leejpsd/nextjs-cache-handler/blob/main/README.md): quick start, wiring, options, production checklist
+- [API reference](https://github.com/leejpsd/nextjs-cache-handler/blob/main/docs/api.md): entry points, options, client configs, metric events
+- [Agent skill](https://github.com/leejpsd/nextjs-cache-handler/blob/main/skills/nextjs-redis-cache/SKILL.md): decision tables, invalidation semantics, troubleshooting playbook
+- [Agent setup instructions](https://github.com/leejpsd/nextjs-cache-handler/blob/main/setup-instructions/setup.md): step-by-step executable install flow
+- [Architecture](https://github.com/leejpsd/nextjs-cache-handler/blob/main/docs/architecture.md): key layout, tag propagation, single-flight
+- [Staging verification](https://github.com/leejpsd/nextjs-cache-handler/blob/main/docs/staging-verification-2026-08-01.md): AWS multi-instance evidence
+
+## Optional
+
+- [Next 16 cacheHandlers spec notes](https://github.com/leejpsd/nextjs-cache-handler/blob/main/docs/next16-spec.md): verified division of labor between Next and handlers
+- [Changelog](https://github.com/leejpsd/nextjs-cache-handler/blob/main/CHANGELOG.md)
