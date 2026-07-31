@@ -108,6 +108,30 @@ function adapt(client: AnyRedis, isClusterClient = false): RedisClientLike {
       client.on(event, listener);
       return client;
     },
+    publish: (channel, message) => client.publish(channel, message),
+    ...(isClusterClient
+      ? {}
+      : {
+          subscribe: async (
+            channel: string,
+            onMessage: (message: string) => void
+          ) => {
+            const sub = (client as Redis).duplicate();
+            sub.on("error", () => {
+              /* subscription manager handles retry */
+            });
+            if (sub.status !== "ready" && sub.status !== "connecting") {
+              await sub.connect();
+            }
+            await sub.subscribe(channel);
+            sub.on("message", (ch: string, message: string) => {
+              if (ch === channel) onMessage(message);
+            });
+            return async () => {
+              sub.disconnect();
+            };
+          },
+        }),
     dispose: () => {
       client.disconnect();
     },

@@ -14,7 +14,24 @@ import type { RedisClientConfig, RedisClientLike } from "../../types.js";
 import { nodeRequire } from "../node-require.js";
 
 export function adaptRedisV5(client: RedisClientType): RedisClientLike {
-  return client as unknown as RedisClientLike;
+  const like = client as unknown as RedisClientLike;
+  // redis@5 exposes publish natively; subscribe needs a duplicate connection.
+  like.subscribe = async (channel, onMessage) => {
+    const sub = client.duplicate();
+    sub.on("error", () => {
+      /* handler-side subscription manager reacts via teardown/retry */
+    });
+    await sub.connect();
+    await sub.subscribe(channel, (message: string) => onMessage(message));
+    return async () => {
+      try {
+        sub.destroy();
+      } catch {
+        /* already closed */
+      }
+    };
+  };
+  return like;
 }
 
 export function createRedisV5Client(

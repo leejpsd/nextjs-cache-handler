@@ -157,6 +157,28 @@ export class MockRedisClient implements RedisClientLike {
     return this;
   }
 
+  private readonly subscribers = new Map<string, Array<(m: string) => void>>();
+
+  async publish(channel: string, message: string): Promise<number> {
+    await this.tick();
+    const subs = this.subscribers.get(channel) ?? [];
+    for (const cb of subs) cb(message);
+    return subs.length;
+  }
+
+  async subscribe(
+    channel: string,
+    onMessage: (message: string) => void
+  ): Promise<() => Promise<void>> {
+    const list = this.subscribers.get(channel) ?? [];
+    list.push(onMessage);
+    this.subscribers.set(channel, list);
+    return async () => {
+      const cur = this.subscribers.get(channel) ?? [];
+      this.subscribers.set(channel, cur.filter((cb) => cb !== onMessage));
+    };
+  }
+
   // ─── Test-only helpers ────────────────────────────────────────────────────
 
   fail(err: Error): void {
