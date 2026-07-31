@@ -295,7 +295,11 @@ export class IncrementalRedisCacheHandler {
           raw = null;
         }
       }
-      if (raw === null) raw = this.state.memEntries.get(eKey);
+      // Memory is a fallback (or the primary store for instance-local tags);
+      // `fallback: "never"` surfaces Redis unavailability as a miss instead.
+      if (raw === null && (useLocal || this.state.opts.fallback !== "never")) {
+        raw = this.state.memEntries.get(eKey);
+      }
       if (raw === null) {
         this.state.emit({ type: "cache.miss" });
         return null;
@@ -353,7 +357,9 @@ export class IncrementalRedisCacheHandler {
             async () => {
               const client = await this.state.conn.getOrConnect();
               if (!client) {
-                this.state.memEntries.set(eKey, serialized, ttl);
+                if (this.state.opts.fallback !== "never") {
+                  this.state.memEntries.set(eKey, serialized, ttl);
+                }
                 return;
               }
               await client.set(eKey, serialized, { EX: ttl });
@@ -369,8 +375,15 @@ export class IncrementalRedisCacheHandler {
         }
       }
 
-      this.state.memEntries.set(eKey, serialized, ttl);
-      this.state.emit({ type: "cache.set", meta: { backend: "memory" } });
+      if (useLocal || this.state.opts.fallback !== "never") {
+        this.state.memEntries.set(eKey, serialized, ttl);
+        this.state.emit({ type: "cache.set", meta: { backend: "memory" } });
+      } else {
+        this.state.emit({
+          type: "cache.set.failed",
+          meta: { reason: "no-fallback" },
+        });
+      }
     } catch (err) {
       this.state.logger.error("set() error", {
         message: (err as Error).message,

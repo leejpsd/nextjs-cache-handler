@@ -126,6 +126,82 @@ describe("incremental cacheHandler — basic ISR round-trip", () => {
   });
 });
 
+describe("incremental cacheHandler — fallback: 'never' consistency (parity with plural handler)", () => {
+  function setupNever() {
+    const client = new MockRedisClient();
+    client.isOpen = true;
+    const Handler = createIncrementalCacheHandler({
+      client: () => client,
+      abortTimeoutMs: 100,
+      fallback: "never",
+    });
+    return { Handler, client };
+  }
+
+  it("a Redis outage surfaces as a miss instead of degrading to per-process memory", async () => {
+    const { Handler, client } = setupNever();
+    const h = new Handler();
+    client.failNext(2); // SET fails, then GET fails
+    await h.set(
+      "/blog",
+      { kind: "APP_PAGE", body: Buffer.from("hello"), headers: {} },
+      { kind: "APP_PAGE" }
+    );
+    const out = await h.get("/blog", { kind: "APP_PAGE" });
+    expect(out).toBeNull();
+  });
+
+  it("set() during a Redis failure leaves no memory copy behind", async () => {
+    const { Handler, client } = setupNever();
+    const h = new Handler();
+    client.failNext(1); // Redis SET fails
+    await h.set(
+      "/blog",
+      { kind: "APP_PAGE", body: Buffer.from("hello"), headers: {} },
+      { kind: "APP_PAGE" }
+    );
+    // Redis is healthy again but empty — the entry must not resurface from
+    // the (unwritten) memory fallback.
+    expect(client.kv.size).toBe(0);
+    const out = await h.get("/blog", { kind: "APP_PAGE" });
+    expect(out).toBeNull();
+  });
+
+  it("get() after a healthy Redis write misses when Redis starts failing", async () => {
+    const { Handler, client } = setupNever();
+    const h = new Handler();
+    await h.set(
+      "/blog",
+      { kind: "APP_PAGE", body: Buffer.from("hello"), headers: {} },
+      { kind: "APP_PAGE" }
+    );
+    client.failNext(10);
+    const out = await h.get("/blog", { kind: "APP_PAGE" });
+    expect(out).toBeNull();
+  });
+
+  it("instance-local: tags still store and serve from memory (explicit opt-in wins)", async () => {
+    const { Handler, client } = setupNever();
+    const h = new Handler();
+    const setSpy = vi.spyOn(client, "set");
+    await h.set(
+      "/local",
+      {
+        kind: "APP_PAGE",
+        body: Buffer.from("x"),
+        headers: { "x-next-cache-tags": "instance-local:user-1" },
+      },
+      { kind: "APP_PAGE" }
+    );
+    expect(setSpy).not.toHaveBeenCalled();
+    const out = await h.get("/local", {
+      kind: "APP_PAGE",
+      tags: ["instance-local:user-1"],
+    });
+    expect(out).not.toBeNull();
+  });
+});
+
 describe("incremental cacheHandler — BUILD_NAMESPACE deployment isolation", () => {
   it("entry from old DEPLOYMENT_VERSION is invisible after deploy roll", async () => {
     process.env.DEPLOYMENT_VERSION = "deploy-A";
