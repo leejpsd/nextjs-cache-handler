@@ -65,6 +65,19 @@ export type RedisClientConfig =
       nodes: Array<{ host: string; port: number }>;
       password?: string;
       tls?: boolean;
+    }
+  | {
+      type: "sentinel";
+      /** Sentinel endpoints (not the data nodes — those are discovered). */
+      sentinels: Array<{ host: string; port: number }>;
+      /** Master group name as configured in sentinel.conf (e.g. "mymaster"). */
+      name: string;
+      /** Password for the discovered Redis data nodes. */
+      password?: string;
+      /** Password for the sentinel processes themselves, when set. */
+      sentinelPassword?: string;
+      tls?: boolean;
+      connectTimeout?: number;
     };
 
 /**

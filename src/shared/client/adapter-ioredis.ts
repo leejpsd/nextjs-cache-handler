@@ -139,6 +139,24 @@ export function createIoredisClient(
   });
 }
 
+export function createIoredisSentinel(
+  config: Extract<RedisClientConfig, { type: "sentinel" }>
+): Redis {
+  const IORedis = require("ioredis") as typeof import("ioredis");
+  const Ctor = IORedis.default ?? (IORedis as unknown as typeof import("ioredis").default);
+  return new Ctor({
+    sentinels: config.sentinels,
+    name: config.name,
+    password: config.password,
+    sentinelPassword: config.sentinelPassword,
+    connectTimeout: config.connectTimeout ?? 1500,
+    tls: config.tls ? {} : undefined,
+    lazyConnect: true,
+    maxRetriesPerRequest: 1,
+    enableAutoPipelining: true,
+  });
+}
+
 export function createIoredisCluster(
   config: Extract<RedisClientConfig, { type: "cluster" }>
 ): Cluster {

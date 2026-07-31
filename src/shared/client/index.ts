@@ -39,6 +39,12 @@ export async function buildClient(
       );
       return adaptCluster(createIoredisCluster(source));
     }
+    case "sentinel": {
+      const { adaptIoredis, createIoredisSentinel } = await import(
+        "./adapter-ioredis.js"
+      );
+      return adaptIoredis(createIoredisSentinel(source));
+    }
     default: {
       const exhaustive: never = source;
       throw new Error(

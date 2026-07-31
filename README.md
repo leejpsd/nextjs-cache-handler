@@ -345,7 +345,8 @@ eventual implementation should converge on the same behavior.
     interface does not exist before 16
 - **Node.js**: `>=20`
 - **redis**: `>=5.0.0` (peer, optional)
-- **ioredis**: `>=5.0.0` (peer, optional)
+- **ioredis**: `>=5.0.0` (peer, optional) — also powers `type: "cluster"` and
+  `type: "sentinel"` (Sentinel master discovery with automatic failover)
 
 ESM and CJS dual-published, full TypeScript types, validated via
 [`arethetypeswrong`](https://arethetypeswrong.github.io) and
