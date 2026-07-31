@@ -185,6 +185,8 @@ interface CacheHandlerOptions {
   singleFlightLockTtlSec?: number; // default: 10
   isBuildPhase?: () => boolean;   // override PHASE_PRODUCTION_BUILD detection
   hashTag?: boolean;              // default: false (set true on Redis Cluster)
+  memoryMaxEntries?: number;      // default: 1000 — LRU cap for the in-memory fallback
+  compression?: "gzip" | "brotli"; // default: off — transparent value compression (node:zlib)
   onMetric?: (event: MetricEvent) => void;
   logger?: Logger;
 }
@@ -192,10 +194,12 @@ interface CacheHandlerOptions {
 type RedisClientConfig =
   | { type: "redis";    url: string; password?: string; tls?: boolean; connectTimeout?: number }
   | { type: "ioredis";  url: string; password?: string; tls?: boolean; connectTimeout?: number }
-  | { type: "cluster";  nodes: { host: string; port: number }[]; password?: string; tls?: boolean };
+  | { type: "cluster";  nodes: { host: string; port: number }[]; password?: string; tls?: boolean }
+  | { type: "sentinel"; sentinels: { host: string; port: number }[]; name: string;
+      password?: string; sentinelPassword?: string; tls?: boolean; connectTimeout?: number };
 ```
 
-Full reference: [`docs/api.md`](./docs/api.md) (auto-generated).
+Full reference: [`docs/api.md`](./docs/api.md).
 
 ---
 

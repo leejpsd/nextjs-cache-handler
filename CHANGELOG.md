@@ -6,6 +6,54 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- **Next.js 15 support** for the singular `cacheHandler` (ISR): both ctx
+  generations accepted (`ctx.revalidate`/`kindHint` and
+  `ctx.cacheControl`/`kind`); `peerDependencies.next` widened to
+  `>=15.0.0 <17`. Verified end to end against Next 15.5 (build, ISR
+  HIT/MISS, tag/path revalidation, fetch-cache TTL, cross-process reads).
+- **Request-scoped GET deduplication** (singular handler):
+  `resetRequestCache()` is now a real implementation — duplicate reads of a
+  cache key within one request share a single Redis GET. New metric event
+  `cache.get.deduped`.
+- **Transparent value compression** (`compression: "gzip" | "brotli"`,
+  default off) via node:zlib — marker-prefixed storage with auto-detecting
+  reads, safe to enable on a live cache with a mixed fleet. Payloads < 1 KiB
+  stay plain.
+- **Redis Sentinel support** (`{ type: "sentinel", sentinels, name }`) via
+  ioredis master discovery — verified locally including a live failover.
+- **Built-in OpenTelemetry adapter** at
+  `@leejpsd/nextjs-cache-handler/otel` (`createOtelMetricEmitter`);
+  `@opentelemetry/api` is an optional peer resolved at runtime.
+- **`memoryMaxEntries` option** (default 1000) bounding the in-memory
+  fallback stores with LRU eviction.
+
+### Fixed
+
+- **Connect failures no longer latch the process into memory-only mode.**
+  Reconnects retry with exponential backoff (1s→30s cap) and dropped
+  connections are replaced (dead clients disposed).
+- **`refreshTags` scans only the current build namespace** and processes
+  markers chunk-by-chunk — the previous 500-key cap silently left tags
+  unpropagated; the local mirror is now rebuilt per complete scan (bounded
+  by live markers) and `memTagExp` is capped.
+- **`fallback: "never"` is honored by the singular handler** (it previously
+  read/wrote the memory fallback unconditionally, silently degrading strict
+  mode to per-process caching).
+- **ESM build can load optional peers**: bare `require()` calls became
+  esbuild's throwing `__require` fallback in ESM; now routed through
+  `createRequire` with a CWD fallback for symlinked installs (npm file
+  installs, pnpm).
+
+### Changed
+
+- Multi-tag `updateTags` fans out concurrently (one round trip via
+  auto-pipelining) instead of one await per tag; ioredis clients enable
+  `enableAutoPipelining`.
+- Removed the declared-but-never-emitted `cache.stale.refresh.skipped`
+  metric event type.
+
 ## [0.2.0] - 2026-05-10
 
 First minor bump. Three differentiators land in this release.

@@ -104,7 +104,6 @@ export type MetricEventType =
   | "cache.stale"
   | "cache.stale.refresh.leader"
   | "cache.stale.refresh.follower"
-  | "cache.stale.refresh.skipped"
   | "cache.set"
   | "cache.set.failed"
   | "tag.invalidate.soft"
