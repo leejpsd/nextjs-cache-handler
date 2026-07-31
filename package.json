@@ -133,6 +133,7 @@
   },
   "files": [
     "dist/",
+    "bin/",
     "skills/",
     "rules/",
     "setup-instructions/",
@@ -203,5 +204,8 @@
   },
   "publishConfig": {
     "access": "public"
+  },
+  "bin": {
+    "nextjs-cache-handler": "./bin/cli.cjs"
   }
 }

@@ -9,6 +9,7 @@ export default defineConfig({
     "shared/client/adapter-ioredis": "src/shared/client/adapter-ioredis.ts",
     "ops/index": "src/ops/index.ts",
     "otel/index": "src/otel/index.ts",
+    "cli/index": "src/cli/index.ts",
   },
   format: ["esm", "cjs"],
   // Inject createRequire-based shims so the runtime `require()` calls in the
