@@ -65,7 +65,7 @@ plural interface as ❌ **"Not yet supported - Help needed"**:
 |---|---|---|---|
 | `cacheHandlers` config (plural) | ✅ | ❌ Help needed | ✅ since 1.11 |
 | `'use cache'` directive | ✅ | ❌ Help needed | ✅ since 1.11 |
-| `'use cache: remote'` | ✅ | ❌ Help needed | partial |
+| `'use cache: remote'` | ✅ default handler (dedicated multi-tier: roadmap) | ❌ Help needed | partial |
 | `'use cache: private'` | n/a (uncustomizable) | n/a | n/a |
 | `cacheComponents: true` | ✅ | ❌ Help needed | ✅ |
 | Build-phase skip (`PHASE_PRODUCTION_BUILD`) | ✅ | ✅ (singular only) | ✅ |
