@@ -123,6 +123,16 @@ Returns:
   instead"*. Useful when soft-tag tracking is too heavy to centralize and the
   handler embeds per-entry soft-tag freshness checks.
 
+> ⚠️ **Verified against `next@16.2.3` source (2026-08-01, issue #1):** the
+> framework calls `getExpiration()` with the **implicit route tags only**
+> (`implicit-tags.js`). For an entry's *explicit* `cacheTag()` tags,
+> `shouldDiscardCacheEntry()` consults nothing beyond the current action's
+> `pendingRevalidatedTags`/`previouslyRevalidatedTags` — it never asks the
+> handler. Cross-request/cross-instance soft invalidation of explicit tags
+> is therefore **entirely `get()`'s responsibility**: the handler must fold
+> `entry.tags` into its freshness check, not just the `softTags` parameter.
+> Missing this made `revalidateTag(tag, "max")` a silent no-op (#1).
+
 #### `updateTags(tags, durations?)`
 
 - Called when `revalidateTag(tag)` or `updateTag(tag)` fires.
