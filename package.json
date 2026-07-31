@@ -1,7 +1,7 @@
 {
   "name": "@leejpsd/nextjs-cache-handler",
-  "version": "0.2.0",
-  "description": "The only Redis cache handler for Next.js 16 that ships both cacheHandler (ISR) and cacheHandlers ('use cache') \u2014 production-validated for multi-instance deployments where @fortedigital lists 'Help needed'.",
+  "version": "0.3.0",
+  "description": "The only Redis cache handler for Next.js 16 that ships both cacheHandler (ISR) and cacheHandlers ('use cache') — production-validated for multi-instance deployments where @fortedigital lists 'Help needed'.",
   "keywords": [
     "next",
     "nextjs",
