@@ -175,7 +175,10 @@
     "attw": "attw --pack .",
     "version:changesets": "changeset version",
     "publish:changesets": "npm run build && changeset publish",
-    "prepublishOnly": "npm run verify && npm run publint && npm run attw"
+    "prepublishOnly": "npm run verify && npm run publint && npm run attw",
+    "test:cluster": "vitest run --config vitest.cluster.config.ts",
+    "test:cluster:up": "scripts/cluster-test-env.sh up",
+    "test:cluster:down": "scripts/cluster-test-env.sh down"
   },
   "peerDependencies": {
     "next": ">=15.0.0 <17",

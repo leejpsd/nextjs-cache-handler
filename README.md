@@ -245,8 +245,10 @@ Full reference: [`docs/api.md`](./docs/api.md).
       on the same hash slot. Without `hashTag`, cluster deployments will hit
       `CROSSSLOT Keys in request don't hash to the same slot`. The flag wraps
       the namespace in `{}` so every key for a given deploy hashes together.
-      Cluster support is implemented but **not yet load-tested at production
-      scale**; PRs welcome.
+      Cluster support is validated by a dedicated e2e suite against a real
+      3-master cluster (`npm run test:cluster`, also in CI) — covering the
+      multi-key Lua scripts, per-master SCAN propagation, and both handlers.
+      Not yet load-tested at production scale.
 - [ ] **Redis `maxmemory-policy: allkeys-lru` or `noeviction`** — if you need
       bounded memory, choose `allkeys-lru`. Otherwise `noeviction` keeps
       tag indices intact.
@@ -261,7 +263,7 @@ Full reference: [`docs/api.md`](./docs/api.md).
 | Service | How to use | Tested? |
 |---|---|---|
 | **Self-hosted Redis 7+** | `{ type: "redis", url }` or `{ type: "ioredis", url }` | ✅ AWS ElastiCache 24h soak |
-| **Redis Cluster** | `{ type: "cluster", nodes }` + `hashTag: true` | unit-tested, not yet load-tested at scale |
+| **Redis Cluster** | `{ type: "cluster", nodes }` + `hashTag: true` | ✅ e2e-tested against a real 3-master cluster (CI); not yet load-tested at scale |
 | **Upstash Redis** | `{ type: "redis", url: "rediss://..." }` (TLS auto-detected) | not yet validated, expected to work via the standard Redis protocol |
 | **AWS ElastiCache (replication group)** | `{ type: "redis", url: "rediss://..." }` | ✅ reference deployment (re-verified 2026-08-01, Seoul) |
 | **Redis Sentinel** | `{ type: "sentinel", sentinels, name }` | ✅ local master/replica failover drill |
