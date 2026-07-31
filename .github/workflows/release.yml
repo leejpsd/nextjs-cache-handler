@@ -32,6 +32,9 @@ jobs:
           cache: npm
           registry-url: https://registry.npmjs.org
 
+      # npm Trusted Publishing (OIDC) requires npm >= 11.5.1; Node 22 bundles 10.x.
+      - run: npm install -g npm@latest
+
       - run: npm ci --no-audit --no-fund
 
       # Verify gates — same set the local pre-publish hook runs.
@@ -68,5 +71,5 @@ jobs:
           version: npm run version:changesets
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          # Auth via npm Trusted Publishing (OIDC) — no NPM_TOKEN secret.
           NPM_CONFIG_PROVENANCE: "true"
