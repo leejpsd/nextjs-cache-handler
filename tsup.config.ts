@@ -8,6 +8,7 @@ export default defineConfig({
     "shared/client/adapter-redis": "src/shared/client/adapter-redis.ts",
     "shared/client/adapter-ioredis": "src/shared/client/adapter-ioredis.ts",
     "ops/index": "src/ops/index.ts",
+    "otel/index": "src/otel/index.ts",
   },
   format: ["esm", "cjs"],
   dts: true,
