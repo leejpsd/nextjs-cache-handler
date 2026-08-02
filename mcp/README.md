@@ -27,6 +27,12 @@ Project `.mcp.json` (Claude Code picks this up automatically):
 
 Runs locally over stdio and connects to YOUR Redis — nothing is hosted.
 
+> **AWS/ElastiCache note**: ElastiCache is VPC-internal, so a locally
+> running MCP server needs an SSH tunnel/bastion (point REDIS_URL at the
+> tunnel). Agents running inside the VPC (CI, in-cluster) connect directly.
+> Pair with the AWS agent skills/MCP: they handle the infrastructure, this
+> server handles cache semantics.
+
 ## Tools
 
 | Tool | What it answers | Writes? |
