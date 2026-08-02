@@ -22,6 +22,14 @@ import { gunzipSync, brotliDecompressSync } from "node:zlib";
 const PLURAL_PREFIX = process.env.CACHE_KEY_PREFIX ?? "next-cache:";
 const ISR_PREFIX = process.env.ISR_KEY_PREFIX ?? "next-incremental:";
 const NS = process.env.DEPLOYMENT_VERSION;
+/** Mirror of the handler's hashTag option — REQUIRED when the app sets
+ *  hashTag: true (Redis Cluster), otherwise every 'use cache' key this
+ *  server computes is wrong. */
+const HASH_TAG = process.env.HASH_TAG === "true";
+const wrapNs = (ns: string): string =>
+  HASH_TAG && !ns.startsWith("{") ? `{${ns}}` : ns;
+/** Escape Redis MATCH glob metacharacters (agent-supplied tags). */
+const escapeMatch = (v: string): string => v.replace(/[\\*?[\]]/g, "\\$&");
 
 let clientPromise: Promise<RedisClientType> | null = null;
 async function redis(): Promise<RedisClientType> {
@@ -38,12 +46,19 @@ async function redis(): Promise<RedisClientType> {
   return clientPromise;
 }
 
+const MAX_INSPECT_BYTES = 2 * 1024 * 1024; // refuse to fully decode above this
+const MAX_DECOMPRESSED = 16 * 1024 * 1024; // zlib bomb guard
+
 function decompress(raw: string): string {
   if (raw.startsWith("__ncgz__:")) {
-    return gunzipSync(Buffer.from(raw.slice(9), "base64")).toString("utf8");
+    return gunzipSync(Buffer.from(raw.slice(9), "base64"), {
+      maxOutputLength: MAX_DECOMPRESSED,
+    }).toString("utf8");
   }
   if (raw.startsWith("__ncbr__:")) {
-    return brotliDecompressSync(Buffer.from(raw.slice(9), "base64")).toString("utf8");
+    return brotliDecompressSync(Buffer.from(raw.slice(9), "base64"), {
+      maxOutputLength: MAX_DECOMPRESSED,
+    }).toString("utf8");
   }
   return raw;
 }
@@ -60,6 +75,16 @@ function text(s: unknown) {
 }
 
 function explain(key: string): Record<string, string> {
+  // ISR tag states are un-namespaced by design; the whole rest is the tag
+  // (which may itself contain colons).
+  if (key.startsWith(`${ISR_PREFIX}tag:`)) {
+    return {
+      layer: "cacheHandler (ISR)",
+      kind: "tag",
+      namespace: "(none — cross-deploy)",
+      key: key.slice(`${ISR_PREFIX}tag:`.length),
+    };
+  }
   for (const prefix of [PLURAL_PREFIX, ISR_PREFIX]) {
     if (!key.startsWith(prefix)) continue;
     const rest = key.slice(prefix.length);
@@ -138,6 +163,21 @@ server.tool(
   { key: z.string().describe("Full Redis key of a cache entry") },
   async ({ key }) => {
     const c = await redis();
+    const size = await c.strLen(key);
+    if (size === 0) {
+      const exists = await c.exists(key);
+      if (!exists) return text({ key, exists: false });
+    }
+    if (size > MAX_INSPECT_BYTES) {
+      return text({
+        key,
+        explained: explain(key),
+        exists: true,
+        storedBytes: size,
+        ttlSeconds: await c.ttl(key),
+        note: `value larger than ${MAX_INSPECT_BYTES} bytes — full decode refused; sizes/TTL only`,
+      });
+    }
     const [raw, ttl] = await Promise.all([c.get(key), c.ttl(key)]);
     if (raw === null) return text({ key, exists: false });
     const compressed = raw.startsWith("__ncgz__:") ? "gzip" : raw.startsWith("__ncbr__:") ? "brotli" : "none";
@@ -179,13 +219,13 @@ server.tool(
     const isrRaw = await c.get(isrKey);
     let plural: Record<string, unknown> = {};
     if (NS) {
-      const markerKey = `${PLURAL_PREFIX}tag-expiration:${NS}:${tag}`;
+      const markerKey = `${PLURAL_PREFIX}tag-expiration:${wrapNs(NS)}:${tag}`;
       const v = await c.get(markerKey);
       plural = { markerKey, invalidatedAt: v ? Number(v) : null };
     } else {
       const found: Record<string, number> = {};
       for await (const keys of c.scanIterator({
-        MATCH: `${PLURAL_PREFIX}tag-expiration:*:${tag}`,
+        MATCH: `${PLURAL_PREFIX}tag-expiration:*:${escapeMatch(tag)}`,
         COUNT: 500,
       })) {
         for (const k of Array.isArray(keys) ? keys : [keys]) {
@@ -248,12 +288,13 @@ server.tool(
   async ({ tag, mode, confirm }) => {
     const c = await redis();
     const now = Date.now();
-    const namespaces: string[] = NS ? [NS] : [];
+    const namespaces: string[] = NS ? [wrapNs(NS)] : [];
     if (namespaces.length === 0) {
-      for await (const keys of c.scanIterator({ MATCH: `${PLURAL_PREFIX}tag:*:${tag}`, COUNT: 500 })) {
+      for await (const keys of c.scanIterator({ MATCH: `${PLURAL_PREFIX}tag:*:${escapeMatch(tag)}`, COUNT: 500 })) {
         for (const k of Array.isArray(keys) ? keys : [keys]) {
-          const m = String(k).match(/tag:(?:\{([^}]+)\}|([^:]+)):/);
-          const ns = m?.[1] ?? m?.[2];
+          const m = String(k).match(/tag:(\{[^}]+\}|[^:]+):/);
+          // Keep braces when discovered — they are part of the key shape.
+          const ns = m?.[1];
           if (ns && !namespaces.includes(ns)) namespaces.push(ns);
         }
       }
@@ -267,8 +308,20 @@ server.tool(
       if (mode === "hard") plan.push(`DEL members of ${PLURAL_PREFIX}tag:${ns}:${tag} (tagged entries)`);
     }
 
+    const warnings: string[] = [];
+    if (!NS && namespaces.length === 0) {
+      warnings.push(
+        "No 'use cache' namespaces discovered (set DEPLOYMENT_VERSION to target one) — only the ISR tag state will be written."
+      );
+    }
+    if (mode === "hard") {
+      warnings.push(
+        "Hard mode here is best-effort (SMEMBERS+DEL), not the handler's atomic Lua — a concurrent set() can survive."
+      );
+    }
+
     if (!confirm) {
-      return text({ dryRun: true, mode, plan, note: "Pass confirm=true to execute." });
+      return text({ dryRun: true, mode, plan, warnings, note: "Pass confirm=true to execute." });
     }
 
     await c.set(
@@ -288,7 +341,7 @@ server.tool(
       // Push notification for tagPubSub subscribers, if any.
       await c.publish(`${PLURAL_PREFIX}inval:${ns}`, JSON.stringify({ t: [tag], ts: now }));
     }
-    return text({ executed: true, mode, namespaces, entriesDeleted: deleted, invalidatedAt: now });
+    return text({ executed: true, mode, namespaces, entriesDeleted: deleted, invalidatedAt: now, warnings });
   }
 );
 
