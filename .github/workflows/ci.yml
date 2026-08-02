@@ -93,3 +93,23 @@ jobs:
       - name: Print snapshot fingerprint
         run: |
           sha256sum docs/next16-spec.md
+
+  cluster:
+    name: Redis Cluster e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: Install redis-server
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq redis-server redis-tools
+      - name: Start 3-master cluster
+        run: scripts/cluster-test-env.sh up
+      - name: Cluster e2e tests
+        run: npm run test:cluster
+      - if: always()
+        run: scripts/cluster-test-env.sh down

@@ -90,6 +90,7 @@ interface HandlerState {
       | "keyPrefix"
       | "singleFlight"
       | "singleFlightLockTtlSec"
+      | "tagPubSub"
     >
   > & { rest: CacheHandlerOptions };
   /** Stable instance identifier baked into refresh-lock owner field. Helps
@@ -106,6 +107,14 @@ interface HandlerState {
   memTagExp: Map<string, number>;
   /** Local mirror of recent tag invalidations refreshed from Redis. */
   localTagTimestamps: Map<string, number>;
+  /** tagPubSub subscription state (opt-in acceleration; polling remains). */
+  pubsub: {
+    active: boolean;
+    disabled: boolean;
+    attempting: boolean;
+    lastAttempt: number;
+    stop?: () => Promise<void>;
+  };
   /** Resolved build namespace, computed once per call. */
   resolveNs: () => string;
 }
@@ -132,6 +141,7 @@ function init(opts: CacheHandlerOptions): HandlerState {
       hashTag: opts.hashTag ?? false,
       keyPrefix: opts.keyPrefix ?? DEFAULT_KEY_PREFIX,
       singleFlight: opts.singleFlight ?? false,
+      tagPubSub: opts.tagPubSub ?? false,
       singleFlightLockTtlSec:
         opts.singleFlightLockTtlSec ?? DEFAULT_LOCK_TTL_SEC,
       rest: opts,
@@ -143,6 +153,7 @@ function init(opts: CacheHandlerOptions): HandlerState {
     memTags: new MemorySetStore(opts.memoryMaxEntries),
     memTagExp: new Map(),
     localTagTimestamps: new Map(),
+    pubsub: { active: false, disabled: false, attempting: false, lastAttempt: 0 },
     resolveNs: () => resolveBuildNamespace(opts.buildNamespace),
     instanceId:
       process.env.HOSTNAME ||
@@ -256,6 +267,7 @@ async function getImpl(
 ): Promise<CacheComponentsEntry | undefined> {
   const start = Date.now();
   const useRedis = gateRedis(state);
+  if (useRedis) void ensureTagSubscription(state);
 
   if (!useRedis && state.opts.fallback === "never") {
     state.emit({ type: "cache.miss", meta: { reason: "no-redis" } });
@@ -357,8 +369,16 @@ async function getImpl(
   if (freshnessTags.length > 0) {
     let mostRecent = 0;
     for (const t of freshnessTags) {
-      const ts = state.localTagTimestamps.get(t);
-      if (ts !== undefined && ts > mostRecent) mostRecent = ts;
+      // memTagExp is folded in deliberately: refreshTags rebuilds
+      // localTagTimestamps wholesale from scanned markers, and a pub/sub
+      // message whose PUBLISHER clock lags the local scanStart can be
+      // rejected by the carry-over while SCAN missed its just-written
+      // marker — memTagExp retains it (size-pruned, never scan-rebuilt).
+      const ts = Math.max(
+        state.localTagTimestamps.get(t) ?? 0,
+        state.memTagExp.get(t) ?? 0
+      );
+      if (ts > mostRecent) mostRecent = ts;
     }
     if (mostRecent > envelope.timestamp) {
       // Soft invalidation is stale-while-revalidate per spec §2.3#updateTags
@@ -542,6 +562,85 @@ async function luaSetWithTags(
   );
 }
 
+// ─── tagPubSub (opt-in push propagation) ─────────────────────────────────────
+
+function invalChannel(state: HandlerState): string {
+  const ns = state.opts.hashTag
+    ? `{${state.resolveNs()}}`
+    : state.resolveNs();
+  return `${state.opts.keyPrefix}inval:${ns}`;
+}
+
+const SUBSCRIBE_RETRY_MS = 5000;
+
+/**
+ * Lazily establish the invalidation subscription. Failures never surface to
+ * callers: the refreshTags() scan remains the consistency safety net, so a
+ * missing/broken subscription only costs latency, not correctness.
+ */
+async function ensureTagSubscription(state: HandlerState): Promise<void> {
+  if (
+    !state.opts.tagPubSub ||
+    state.pubsub.active ||
+    state.pubsub.disabled ||
+    state.pubsub.attempting
+  ) {
+    return;
+  }
+  const now = Date.now();
+  if (now - state.pubsub.lastAttempt < SUBSCRIBE_RETRY_MS) return;
+  state.pubsub.lastAttempt = now;
+  state.pubsub.attempting = true;
+
+  try {
+    const client = await state.conn.getOrConnect();
+    if (!client) return;
+    if (typeof client.subscribe !== "function") {
+      state.pubsub.disabled = true;
+      state.logger.warn(
+        "tagPubSub unavailable on this client (no subscribe support, e.g. Cluster) — falling back to scan-based propagation"
+      );
+      return;
+    }
+    const stop = await client.subscribe(
+      invalChannel(state),
+      (message) => {
+        try {
+          const parsed = JSON.parse(message) as { t?: string[]; ts?: number };
+          if (!Array.isArray(parsed.t) || typeof parsed.ts !== "number") return;
+          for (const tag of parsed.t) {
+            const prev = state.localTagTimestamps.get(tag) ?? 0;
+            if (parsed.ts > prev) state.localTagTimestamps.set(tag, parsed.ts);
+            const prevMem = state.memTagExp.get(tag) ?? 0;
+            if (parsed.ts > prevMem) state.memTagExp.set(tag, parsed.ts);
+          }
+          // #11: keep the mirrors bounded between scans too.
+          pruneOldestByTimestamp(state.localTagTimestamps, MAX_LOCAL_TAG_ENTRIES);
+          pruneOldestByTimestamp(state.memTagExp, MAX_LOCAL_TAG_ENTRIES);
+        } catch {
+          // Malformed message — ignore; the scan will reconcile.
+        }
+      },
+      () => {
+        // Subscriber connection died (failover/restart). Un-latch so the
+        // 5s retry path re-establishes; the scan covers the gap.
+        state.pubsub.active = false;
+      }
+    );
+    state.pubsub.active = true;
+    state.pubsub.stop = async () => {
+      state.pubsub.active = false;
+      await stop();
+    };
+  } catch (err) {
+    state.logger.warn("tagPubSub subscribe failed — will retry", {
+      message: (err as Error).message,
+    });
+  } finally {
+    state.pubsub.attempting = false;
+  }
+}
+
 // ─── refreshTags() ───────────────────────────────────────────────────────────
 
 async function refreshTagsImpl(state: HandlerState): Promise<void> {
@@ -552,6 +651,7 @@ async function refreshTagsImpl(state: HandlerState): Promise<void> {
     return;
   }
 
+  void ensureTagSubscription(state);
   try {
     await withAbortSignal(
       "cacheHandlers.refreshTags",
@@ -775,6 +875,20 @@ async function updateTagsImpl(
       type: isHardExpire ? "tag.invalidate.hard" : "tag.invalidate.soft",
       meta: { count: tags.length, backend: "redis" },
     });
+    if (state.opts.tagPubSub) {
+      // Best-effort push notification — subscribers converge in ms instead
+      // of at their next refreshTags() scan. Failures are irrelevant to
+      // correctness (markers are already written).
+      try {
+        const client = await state.conn.getOrConnect();
+        await client?.publish?.(
+          invalChannel(state),
+          JSON.stringify({ t: tags, ts: now })
+        );
+      } catch {
+        /* scan reconciles */
+      }
+    }
   } catch (err) {
     if (err instanceof CacheTimeoutError) {
       state.emit({ type: "redis.timeout", meta: { op: "updateTags" } });

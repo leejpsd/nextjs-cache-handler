@@ -27,10 +27,12 @@ function adapt(client: AnyRedis, isClusterClient = false): RedisClientLike {
       }
     },
     get: (k) => client.get(k),
-    set: (k, v, opts) =>
-      opts?.EX !== undefined
-        ? client.set(k, v, "EX", opts.EX)
-        : client.set(k, v),
+    set: (k, v, opts) => {
+      const args: (string | number)[] = [];
+      if (opts?.EX !== undefined) args.push("EX", opts.EX);
+      if (opts?.NX) args.push("NX");
+      return (client.set as (...a: unknown[]) => Promise<unknown>)(k, v, ...args);
+    },
     del: async (keys) => {
       const arr = Array.isArray(keys) ? keys : [keys];
       if (arr.length === 0) return 0;
@@ -106,6 +108,47 @@ function adapt(client: AnyRedis, isClusterClient = false): RedisClientLike {
       client.on(event, listener);
       return client;
     },
+    publish: (channel, message) => client.publish(channel, message),
+    ...(isClusterClient
+      ? {}
+      : {
+          subscribe: async (
+            channel: string,
+            onMessage: (message: string) => void,
+            onDown?: () => void
+          ) => {
+            const sub = (client as Redis).duplicate();
+            let down = false;
+            const markDown = () => {
+              if (down) return;
+              down = true;
+              try {
+                sub.disconnect();
+              } catch {
+                /* already closed */
+              }
+              onDown?.();
+            };
+            sub.on("error", markDown);
+            sub.on("end", markDown);
+            try {
+              if (sub.status !== "ready" && sub.status !== "connecting") {
+                await sub.connect();
+              }
+              await sub.subscribe(channel);
+            } catch (err) {
+              markDown();
+              throw err;
+            }
+            sub.on("message", (ch: string, message: string) => {
+              if (ch === channel) onMessage(message);
+            });
+            return async () => {
+              down = true;
+              sub.disconnect();
+            };
+          },
+        }),
     dispose: () => {
       client.disconnect();
     },

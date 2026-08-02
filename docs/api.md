@@ -15,6 +15,7 @@ Package: `@leejpsd/nextjs-cache-handler` — Redis cache handler for Next.js
 | `.../client/ioredis` | `adaptIoredis`, `adaptCluster`, `createIoredisClient`, `createIoredisSentinel`, `createIoredisCluster` | wrap your own ioredis / Cluster / Sentinel client |
 | `.../ops` | `getMetricSnapshot` | process-local metric counters for health endpoints |
 | `.../otel` | `createOtelMetricEmitter` | built-in OpenTelemetry adapter (needs `@opentelemetry/api` in your app) |
+| `.../seed` | `seedBuildOutput` | seed `.next` build output into Redis (NX-protected) — also `npx nextjs-cache-handler seed` |
 
 ## Factories
 
@@ -48,6 +49,7 @@ ctx contract are accepted (`ctx.cacheControl.revalidate` / `kind` and
 | `singleFlightLockTtlSec` | `number` | `10` | lock TTL for `singleFlight` |
 | `isBuildPhase` | `() => boolean` | `NEXT_PHASE === "phase-production-build"` | build-phase gate override |
 | `hashTag` | `boolean` | `false` | wrap namespace in `{}` — **required on Redis Cluster** (multi-key Lua) |
+| `tagPubSub` | `boolean` | `false` | push-based cross-instance tag propagation (plural handler; ~3ms); scan polling remains the safety net; unavailable on Cluster |
 | `onMetric` | `(event: MetricEvent) => void` | — | telemetry hook; emitter errors are swallowed |
 | `logger` | `Logger` | console (warn+) | injectable 4-level logger |
 

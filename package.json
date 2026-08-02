@@ -1,7 +1,7 @@
 {
   "name": "@leejpsd/nextjs-cache-handler",
   "version": "0.3.4",
-  "description": "Redis cache handler for Next.js 15/16 — the only one shipping both cacheHandler (ISR) and cacheHandlers ('use cache') with built-in compression, Redis Sentinel, and OpenTelemetry. Production-validated on multi-instance AWS: reconnect backoff, cross-instance tag invalidation, zero-downtime Redis failover.",
+  "description": "Redis cache handler for Next.js 15/16 \u2014 the only one shipping both cacheHandler (ISR) and cacheHandlers ('use cache') with built-in compression, Redis Sentinel, and OpenTelemetry. Production-validated on multi-instance AWS: reconnect backoff, cross-instance tag invalidation, zero-downtime Redis failover.",
   "keywords": [
     "next",
     "nextjs",
@@ -55,6 +55,9 @@
       ],
       "otel": [
         "./dist/otel/index.d.ts"
+      ],
+      "seed": [
+        "./dist/seed/index.d.ts"
       ]
     }
   },
@@ -119,6 +122,16 @@
         "default": "./dist/ops/index.cjs"
       }
     },
+    "./seed": {
+      "import": {
+        "types": "./dist/seed/index.d.ts",
+        "default": "./dist/seed/index.js"
+      },
+      "require": {
+        "types": "./dist/seed/index.d.cts",
+        "default": "./dist/seed/index.cjs"
+      }
+    },
     "./otel": {
       "import": {
         "types": "./dist/otel/index.d.ts",
@@ -133,6 +146,7 @@
   },
   "files": [
     "dist/",
+    "bin/",
     "skills/",
     "rules/",
     "setup-instructions/",
@@ -161,7 +175,10 @@
     "attw": "attw --pack .",
     "version:changesets": "changeset version",
     "publish:changesets": "npm run build && changeset publish",
-    "prepublishOnly": "npm run verify && npm run publint && npm run attw"
+    "prepublishOnly": "npm run verify && npm run publint && npm run attw",
+    "test:cluster": "vitest run --config vitest.cluster.config.ts",
+    "test:cluster:up": "scripts/cluster-test-env.sh up",
+    "test:cluster:down": "scripts/cluster-test-env.sh down"
   },
   "peerDependencies": {
     "next": ">=15.0.0 <17",
@@ -203,5 +220,8 @@
   },
   "publishConfig": {
     "access": "public"
+  },
+  "bin": {
+    "nextjs-cache-handler": "./bin/cli.cjs"
   }
 }

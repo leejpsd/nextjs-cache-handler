@@ -11,7 +11,11 @@ export interface RedisClientLike {
   isOpen: boolean;
   connect(): Promise<unknown>;
   get(key: string): Promise<string | null>;
-  set(key: string, value: string, opts?: { EX?: number }): Promise<unknown>;
+  set(
+    key: string,
+    value: string,
+    opts?: { EX?: number; NX?: boolean }
+  ): Promise<unknown>;
   del(keys: string | string[]): Promise<number>;
   sAdd(key: string, member: string | string[]): Promise<number>;
   sMembers(key: string): Promise<string[]>;
@@ -32,6 +36,21 @@ export interface RedisClientLike {
   }): AsyncIterable<string[] | string>;
   ping(): Promise<string>;
   on(event: "error", listener: (err: Error) => void): unknown;
+  /**
+   * Publish a message to a channel. Optional — used by the opt-in
+   * `tagPubSub` acceleration; absence simply disables it.
+   */
+  publish?(channel: string, message: string): Promise<unknown>;
+  /**
+   * Subscribe to a channel on a DEDICATED duplicate connection (Redis
+   * protocol requirement). Resolves to an unsubscribe/teardown function.
+   * Optional — absence disables `tagPubSub` on this client.
+   */
+  subscribe?(
+    channel: string,
+    onMessage: (message: string) => void,
+    onDown?: () => void
+  ): Promise<() => Promise<void>>;
   /**
    * Close the underlying connection without waiting for pending replies.
    * Called by the connection manager when a dead client is replaced. Optional:
@@ -207,6 +226,19 @@ export interface CacheHandlerOptions {
    * Default: `true`. Set to `false` to revert to "expire on revalidate" behavior.
    */
   staleWhileRevalidate?: boolean;
+
+  /**
+   * Push-based cross-instance tag propagation (plural handler only).
+   *
+   * When enabled, `updateTags()` publishes invalidations on a namespaced
+   * channel and every instance keeps a subscription on a dedicated
+   * connection, updating its local tag mirror within milliseconds instead
+   * of waiting for the next `refreshTags()` scan. The scan keeps running as
+   * the consistency safety net, so a dropped subscription degrades to the
+   * default behavior rather than to staleness. Not available on Cluster
+   * clients (falls back to polling with a warning). Default: `false`.
+   */
+  tagPubSub?: boolean;
 
   /**
    * Single-flight refresh lock for the SWR boundary.

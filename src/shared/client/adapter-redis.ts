@@ -14,7 +14,47 @@ import type { RedisClientConfig, RedisClientLike } from "../../types.js";
 import { nodeRequire } from "../node-require.js";
 
 export function adaptRedisV5(client: RedisClientType): RedisClientLike {
-  return client as unknown as RedisClientLike;
+  const like = client as unknown as RedisClientLike;
+  like.dispose = () => {
+    try {
+      client.destroy();
+    } catch {
+      /* already closed */
+    }
+  };
+  // redis@5 exposes publish natively; subscribe needs a duplicate connection.
+  like.subscribe = async (channel, onMessage, onDown) => {
+    const sub = client.duplicate();
+    const teardown = () => {
+      try {
+        sub.destroy();
+      } catch {
+        /* already closed */
+      }
+    };
+    let down = false;
+    const markDown = () => {
+      if (down) return;
+      down = true;
+      teardown();
+      onDown?.();
+    };
+    sub.on("error", markDown);
+    // reconnectStrategy is false on duplicates — a dropped socket is final,
+    // so surface it instead of latching a dead subscription as active.
+    sub.on("end", markDown);
+    try {
+      await sub.connect();
+      await sub.subscribe(channel, (message: string) => onMessage(message));
+    } catch (err) {
+      // CRITICAL: without this, every failed SUBSCRIBE (e.g. ACL without
+      // channel permissions) leaks one connected duplicate per retry.
+      teardown();
+      throw err;
+    }
+    return async () => teardown();
+  };
+  return like;
 }
 
 export function createRedisV5Client(

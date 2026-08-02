@@ -54,8 +54,13 @@ export class MockRedisClient implements RedisClientLike {
     return this.kv.get(key) ?? null;
   }
 
-  async set(key: string, value: string, _opts?: { EX?: number }): Promise<unknown> {
+  async set(
+    key: string,
+    value: string,
+    opts?: { EX?: number; NX?: boolean }
+  ): Promise<unknown> {
     await this.tick();
+    if (opts?.NX && this.kv.has(key)) return null; // Redis returns nil when NX blocks
     this.kv.set(key, value);
     return "OK";
   }
@@ -150,6 +155,28 @@ export class MockRedisClient implements RedisClientLike {
   on(event: "error", listener: (err: Error) => void): unknown {
     if (event === "error") this.errorListeners.push(listener);
     return this;
+  }
+
+  private readonly subscribers = new Map<string, Array<(m: string) => void>>();
+
+  async publish(channel: string, message: string): Promise<number> {
+    await this.tick();
+    const subs = this.subscribers.get(channel) ?? [];
+    for (const cb of subs) cb(message);
+    return subs.length;
+  }
+
+  async subscribe(
+    channel: string,
+    onMessage: (message: string) => void
+  ): Promise<() => Promise<void>> {
+    const list = this.subscribers.get(channel) ?? [];
+    list.push(onMessage);
+    this.subscribers.set(channel, list);
+    return async () => {
+      const cur = this.subscribers.get(channel) ?? [];
+      this.subscribers.set(channel, cur.filter((cb) => cb !== onMessage));
+    };
   }
 
   // ─── Test-only helpers ────────────────────────────────────────────────────

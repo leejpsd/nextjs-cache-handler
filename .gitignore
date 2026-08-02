@@ -11,3 +11,5 @@ coverage/
 *.tsbuildinfo
 .cache/
 .turbo/
+mcp/node_modules
+mcp/dist
