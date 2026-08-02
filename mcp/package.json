@@ -1,6 +1,6 @@
 {
   "name": "@leejpsd/nextjs-cache-handler-mcp",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "MCP server for inspecting and operating @leejpsd/nextjs-cache-handler Redis caches \u2014 health, key inspection, tag state, SWR simulation, and dry-run-first invalidation for AI agents.",
   "keywords": [
     "mcp",
@@ -41,5 +41,6 @@
   },
   "engines": {
     "node": ">=20.0.0"
-  }
+  },
+  "mcpName": "io.github.leejpsd/nextjs-cache-handler-mcp"
 }
