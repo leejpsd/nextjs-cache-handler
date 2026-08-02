@@ -31,6 +31,11 @@ troubleshooting playbook ships in the package (`AGENTS.md`,
 `skills/nextjs-redis-cache/SKILL.md`) and via
 `npx skills add leejpsd/nextjs-cache-handler`.
 
+For cache operations from your agent (health, tag state, safe invalidation),
+the companion MCP server is on the official registry as
+`io.github.leejpsd/nextjs-cache-handler-mcp` — or one command:
+`npx nextjs-cache-handler init --yes` wires handlers, rules, and `.mcp.json` together.
+
 ---
 
 The Redis cache handler for **Next.js 15/16** that ships **both** `cacheHandler`

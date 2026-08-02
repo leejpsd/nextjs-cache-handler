@@ -1,7 +1,7 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
   "name": "io.github.leejpsd/nextjs-cache-handler-mcp",
-  "description": "Inspect and operate @leejpsd/nextjs-cache-handler Redis caches for Next.js — health, key inspection, tag invalidation state, SWR simulation, dry-run-first invalidation.",
+  "description": "Inspect and operate Next.js Redis caches: health, tag state, SWR simulation, safe invalidation.",
   "repository": {
     "url": "https://github.com/leejpsd/nextjs-cache-handler",
     "source": "github",
@@ -10,29 +10,31 @@
   "version": "0.1.2",
   "packages": [
     {
-      "registry_type": "npm",
-      "registry_base_url": "https://registry.npmjs.org",
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "@leejpsd/nextjs-cache-handler-mcp",
       "version": "0.1.2",
-      "transport": { "type": "stdio" },
-      "environment_variables": [
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
         {
           "name": "REDIS_URL",
           "description": "Redis connection string the cache handler uses",
-          "is_required": true,
-          "is_secret": true
+          "isRequired": true,
+          "isSecret": true
         },
         {
           "name": "DEPLOYMENT_VERSION",
-          "description": "Deploy namespace (recommended — scopes namespace-aware tools)",
-          "is_required": false,
-          "is_secret": false
+          "description": "Deploy namespace (recommended)",
+          "isRequired": false,
+          "isSecret": false
         },
         {
           "name": "HASH_TAG",
-          "description": "Set to 'true' when the handlers use hashTag: true (Redis Cluster)",
-          "is_required": false,
-          "is_secret": false
+          "description": "Set 'true' when handlers use hashTag: true (Redis Cluster)",
+          "isRequired": false,
+          "isSecret": false
         }
       ]
     }
