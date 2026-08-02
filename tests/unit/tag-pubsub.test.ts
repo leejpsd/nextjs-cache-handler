@@ -106,6 +106,58 @@ describe("cacheHandlers — tagPubSub push propagation", () => {
     expect(await handler.get("k", [])).toBeDefined();
   });
 
+  it("BLOCKER regression: a failing subscribe is torn down and retried later (no latch)", async () => {
+    const client = new MockRedisClient();
+    client.isOpen = true;
+    let calls = 0;
+    (client as unknown as { subscribe: unknown }).subscribe = async () => {
+      calls += 1;
+      throw new Error("NOPERM subscribe");
+    };
+    const handler = createCacheComponentsHandler({
+      client: () => client,
+      abortTimeoutMs: 100,
+      tagPubSub: true,
+      logger: { debug() {}, info() {}, warn() {}, error() {} },
+    });
+
+    await handler.get("k", []); // attempt #1 fails
+    await handler.get("k", []); // within 5s cooldown → no second attempt
+    expect(calls).toBe(1);
+
+    vi.setSystemTime(new Date(T0 + 6000)); // past SUBSCRIBE_RETRY_MS
+    await handler.get("k", []);
+    expect(calls).toBe(2); // retried, not permanently disabled or latched
+  });
+
+  it("a dropped subscription un-latches active so retry can re-establish", async () => {
+    const client = new MockRedisClient();
+    client.isOpen = true;
+    let downCb: (() => void) | undefined;
+    let subs = 0;
+    (client as unknown as { subscribe: unknown }).subscribe = async (
+      _ch: string,
+      _cb: (m: string) => void,
+      onDown?: () => void
+    ) => {
+      subs += 1;
+      downCb = onDown;
+      return async () => {};
+    };
+    const handler = createCacheComponentsHandler({
+      client: () => client,
+      abortTimeoutMs: 100,
+      tagPubSub: true,
+    });
+    await handler.get("k", []);
+    expect(subs).toBe(1);
+
+    downCb?.(); // connection dies
+    vi.setSystemTime(new Date(T0 + 6000));
+    await handler.get("k", []);
+    expect(subs).toBe(2); // re-established
+  });
+
   it("default (tagPubSub off) never subscribes", async () => {
     const client = new MockRedisClient();
     client.isOpen = true;

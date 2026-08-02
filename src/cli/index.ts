@@ -235,7 +235,42 @@ export async function init(ctx: Ctx): Promise<number> {
     log(`${WARN} no CLAUDE.md/AGENTS.md found — skip rules injection (create one to guide your agent)`);
   }
 
-  // 5) Optional skill install.
+  // 5) MCP registration — one file turns any MCP-capable agent (Claude
+  // Code, Cursor, ...) into a cache operator via npx (no install needed).
+  const mcpPath = path.join(cwd, ".mcp.json");
+  if (fs.existsSync(mcpPath)) {
+    const body = fs.readFileSync(mcpPath, "utf8");
+    if (body.includes("nextjs-cache-handler-mcp")) {
+      log(`${OK} .mcp.json already registers the cache MCP server`);
+    } else {
+      log(`${ACTION} .mcp.json exists — add the "nextjs-cache" server manually (see @leejpsd/nextjs-cache-handler-mcp README)`);
+    }
+  } else if (apply) {
+    fs.writeFileSync(
+      mcpPath,
+      JSON.stringify(
+        {
+          mcpServers: {
+            "nextjs-cache": {
+              command: "npx",
+              args: ["-y", "@leejpsd/nextjs-cache-handler-mcp"],
+              env: {
+                REDIS_URL: "redis://127.0.0.1:6379",
+                DEPLOYMENT_VERSION: "dev",
+              },
+            },
+          },
+        },
+        null,
+        2
+      ) + "\n"
+    );
+    log(`${OK} wrote .mcp.json — your agent now has cache_health/tag_state/... tools (edit REDIS_URL for real environments)`);
+  } else {
+    log(`${ACTION} would create .mcp.json registering @leejpsd/nextjs-cache-handler-mcp`);
+  }
+
+  // 6) Optional skill install.
   if (flags.has("--skills")) {
     const skillSrc = packagedFile("skills/nextjs-redis-cache/SKILL.md");
     if (skillSrc) {
@@ -326,40 +361,67 @@ export async function doctor(ctx: Ctx): Promise<number> {
 // ─── seed ────────────────────────────────────────────────────────────────────
 
 export async function seed(ctx: Ctx): Promise<number> {
-  const { args, log } = ctx;
+  const { args, flags, log } = ctx;
   const urlIdx = args.indexOf("--url");
   const url = urlIdx >= 0 ? args[urlIdx + 1] : process.env.REDIS_URL;
   if (!url) {
     log(`${ERR} no Redis URL — pass --url <redis-url> or set REDIS_URL`);
     return 1;
   }
-  const dirIdx = args.indexOf("--dir");
-  const dir = (dirIdx >= 0 ? args[dirIdx + 1] : undefined) ?? ".next";
+  const flagVal = (name: string): string | undefined => {
+    const i = args.indexOf(name);
+    return i >= 0 ? args[i + 1] : undefined;
+  };
+  const dir = flagVal("--dir") ?? ".next";
+  const keyPrefix = flagVal("--key-prefix");
+  const namespace = flagVal("--namespace");
+  const compression = flagVal("--compression") as "gzip" | "brotli" | undefined;
+  const hashTag = flags.has("--hash-tag");
 
-  if (!process.env.DEPLOYMENT_VERSION) {
-    log(`${WARN} DEPLOYMENT_VERSION not set — seeding into the "unversioned" namespace`);
+  const ns =
+    namespace ??
+    process.env.DEPLOYMENT_VERSION ??
+    process.env.GIT_HASH ??
+    "unversioned";
+  if (ns === "unversioned") {
+    log(`${WARN} no namespace — seeding into "unversioned" (set DEPLOYMENT_VERSION or pass --namespace)`);
   }
+  // Print the exact key shape so a config mismatch with the runtime handler
+  // (custom keyPrefix / hashTag) is visible instead of silently seeding
+  // keys the app never reads.
+  log(`${OK} target keys: ${keyPrefix ?? "next-incremental:"}entry:${hashTag ? `{${ns}}` : ns}:*`);
 
-  try {
-    const summary = await seedBuildOutput({
-      client: { type: "redis", url },
-      dir,
-    });
+  const seedOpts = {
+    dir,
+    buildNamespace: ns,
+    ...(keyPrefix ? { keyPrefix } : {}),
+    ...(compression ? { compression } : {}),
+    ...(hashTag ? { hashTag: true } : {}),
+  };
+  const report = (summary: Awaited<ReturnType<typeof seedBuildOutput>>): number => {
     log(`${OK} seeded: ${summary.routes} app routes, ${summary.pages} pages routes, ${summary.fetch} fetch entries`);
     if (summary.skippedExisting > 0)
       log(`${OK} left ${summary.skippedExisting} newer live entries untouched (NX)`);
+    if (summary.skippedRouteHandlers > 0)
+      log(`${OK} ${summary.skippedRouteHandlers} prerendered route handlers not seeded (by design)`);
     if (summary.skippedIncomplete > 0)
-      log(`${WARN} skipped ${summary.skippedIncomplete} routes with incomplete build files (dynamic/PPR-partial)`);
+      log(`${WARN} skipped ${summary.skippedIncomplete} routes (incomplete files or PPR resume state)`);
     for (const e of summary.errors.slice(0, 5)) log(`${WARN} ${e}`);
     return summary.errors.length > 0 ? 1 : 0;
+  };
+
+  try {
+    return report(
+      await seedBuildOutput({ client: { type: "redis", url }, ...seedOpts })
+    );
   } catch (err) {
     const msg = (err as Error).message;
     if (/Cannot find module 'redis'/.test(msg)) {
       // Retry with ioredis when only that peer is installed.
       try {
-        const summary = await seedBuildOutput({ client: { type: "ioredis", url }, dir });
-        log(`${OK} seeded: ${summary.routes} app routes, ${summary.pages} pages routes, ${summary.fetch} fetch entries`);
-        return 0;
+        return report(
+          await seedBuildOutput({ client: { type: "ioredis", url }, ...seedOpts })
+        );
       } catch (err2) {
         log(`${ERR} ${(err2 as Error).message}`);
         return 1;
@@ -393,7 +455,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
 Commands:
   init    [--yes] [--dry-run] [--skills]   wire handlers into this Next.js app
   doctor  [--url <redis-url>]              connectivity + cache diagnostics
-  seed    [--dir .next] [--url <redis-url>] seed prerendered build output into Redis
+  seed    [--dir .next] [--url <u>] [--namespace <ns>] [--key-prefix <p>] [--hash-tag] [--compression gzip|brotli]
+          seed prerendered build output into Redis
 
 Agent setup instructions:
   https://raw.githubusercontent.com/leejpsd/nextjs-cache-handler/main/setup-instructions/setup.md`);

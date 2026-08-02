@@ -59,8 +59,10 @@ export interface SeedSummary {
   fetch: number;
   /** Entries skipped because a (newer) live entry already existed (NX). */
   skippedExisting: number;
-  /** Routes skipped because their files were incomplete/dynamic. */
+  /** Routes skipped because their files were incomplete or PPR-postponed. */
   skippedIncomplete: number;
+  /** Prerendered route handlers (.body) — never seeded, by design. */
+  skippedRouteHandlers: number;
   errors: string[];
 }
 
@@ -86,6 +88,7 @@ function readMeta(file: string): {
   status?: number;
   headers?: Record<string, string>;
   segmentPaths?: string[];
+  postponed?: string;
 } | null {
   try {
     return JSON.parse(fs.readFileSync(file, "utf8")) as ReturnType<typeof readMeta>;
@@ -134,6 +137,7 @@ export async function seedBuildOutput(options: SeedOptions): Promise<SeedSummary
     fetch: 0,
     skippedExisting: 0,
     skippedIncomplete: 0,
+    skippedRouteHandlers: 0,
     errors: [],
   };
 
@@ -186,10 +190,24 @@ export async function seedBuildOutput(options: SeedOptions): Promise<SeedSummary
         const rscPath = path.join(dir, "server", "app", `${base.slice(1)}.rsc`);
         const metaPath = path.join(dir, "server", "app", `${base.slice(1)}.meta`);
         if (!fs.existsSync(htmlPath) || !fs.existsSync(metaPath)) {
-          summary.skippedIncomplete += 1;
+          // Prerendered route handlers emit .body/.meta instead of .html —
+          // they are intentionally not seeded, and not "incomplete".
+          if (fs.existsSync(path.join(dir, "server", "app", `${base.slice(1)}.body`))) {
+            summary.skippedRouteHandlers += 1;
+          } else {
+            summary.skippedIncomplete += 1;
+          }
           continue;
         }
         const meta = readMeta(metaPath) ?? {};
+        if (meta.postponed) {
+          // PPR routes with resume state cannot be faithfully seeded from
+          // static files (the runtime needs `postponed` to resume dynamic
+          // holes, and Next intentionally omits the .rsc for them). Serving
+          // a seeded copy would freeze the unresolved shell as final HTML.
+          summary.skippedIncomplete += 1;
+          continue;
+        }
 
         let segmentData: Map<string, Buffer> | undefined;
         if (Array.isArray(meta.segmentPaths) && meta.segmentPaths.length > 0) {
@@ -244,7 +262,15 @@ export async function seedBuildOutput(options: SeedOptions): Promise<SeedSummary
       }
     }
   } finally {
-    client.dispose?.();
+    const c = client as RedisClientLike & {
+      destroy?: () => unknown;
+      disconnect?: () => unknown;
+    };
+    try {
+      (c.dispose ?? c.destroy ?? c.disconnect)?.call(c);
+    } catch {
+      /* best-effort */
+    }
   }
 
   return summary;

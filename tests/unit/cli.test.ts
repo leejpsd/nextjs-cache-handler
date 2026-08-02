@@ -120,6 +120,19 @@ describe("cli init — generation (--yes)", () => {
     expect(claude).toContain("revalidateTag");
   });
 
+  it("creates .mcp.json registering the MCP server, and never clobbers an existing one", async () => {
+    writePkg("^16.1.5", { redis: "^5.0.0" });
+    await init(ctx(["--yes"]));
+    const mcp = JSON.parse(fs.readFileSync(path.join(dir, ".mcp.json"), "utf8"));
+    expect(mcp.mcpServers["nextjs-cache"].args).toContain("@leejpsd/nextjs-cache-handler-mcp");
+
+    fs.writeFileSync(path.join(dir, ".mcp.json"), '{"mcpServers":{"other":{}}}');
+    lines = [];
+    await init(ctx(["--yes"]));
+    expect(fs.readFileSync(path.join(dir, ".mcp.json"), "utf8")).toBe('{"mcpServers":{"other":{}}}');
+    expect(lines.join("\n")).toContain("add the \"nextjs-cache\" server manually");
+  });
+
   it("never edits next.config — guidance only", async () => {
     writePkg("^16.1.5", { redis: "^5.0.0" });
     const cfg = 'module.exports = { reactStrictMode: true };\n';

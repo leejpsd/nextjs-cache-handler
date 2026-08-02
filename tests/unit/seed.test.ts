@@ -165,6 +165,43 @@ describe("seedBuildOutput", () => {
     expect(summary.skippedIncomplete).toBe(2); // /blog + /broken
   });
 
+  it("BLOCKER regression: skips PPR routes carrying resume state (postponed)", async () => {
+    // A seeded copy without `postponed` would freeze the unresolved shell
+    // as the final page — such routes must be skipped, not seeded.
+    const app = path.join(dir, "server", "app");
+    fs.writeFileSync(path.join(app, "ppr.html"), "<html>shell</html>");
+    fs.writeFileSync(
+      path.join(app, "ppr.meta"),
+      JSON.stringify({ status: 200, headers: {}, postponed: "RESUME-STATE" })
+    );
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(dir, "prerender-manifest.json"), "utf8")
+    );
+    manifest.routes["/ppr"] = { initialRevalidateSeconds: 60, dataRoute: "/ppr.rsc" };
+    fs.writeFileSync(path.join(dir, "prerender-manifest.json"), JSON.stringify(manifest));
+
+    const client = mock();
+    const summary = await seedBuildOutput({ client: () => client, dir, buildNamespace: "d" });
+    expect(client.kv.has("next-incremental:entry:d:/ppr")).toBe(false);
+    expect(summary.skippedIncomplete).toBe(2); // /ppr + /broken
+  });
+
+  it("prerendered route handlers (.body) are counted separately, not as incomplete", async () => {
+    const app = path.join(dir, "server", "app");
+    fs.writeFileSync(path.join(app, "api-route.body"), "payload");
+    fs.writeFileSync(path.join(app, "api-route.meta"), JSON.stringify({ status: 200 }));
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(dir, "prerender-manifest.json"), "utf8")
+    );
+    manifest.routes["/api-route"] = { initialRevalidateSeconds: 60, dataRoute: null };
+    fs.writeFileSync(path.join(dir, "prerender-manifest.json"), JSON.stringify(manifest));
+
+    const client = mock();
+    const summary = await seedBuildOutput({ client: () => client, dir, buildNamespace: "d" });
+    expect(summary.skippedRouteHandlers).toBe(1);
+    expect(summary.skippedIncomplete).toBe(1); // only /broken
+  });
+
   it("throws a clear error without a build", async () => {
     await expect(
       seedBuildOutput({ client: () => mock(), dir: path.join(dir, "nope") })

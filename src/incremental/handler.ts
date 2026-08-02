@@ -243,7 +243,14 @@ async function readTagStates(
       async () => {
         const client = await state.conn.getOrConnect();
         if (!client) return tags.map((t) => state.memTagStates.get(t) ?? null);
-        const values = await client.mGet(tags.map((t) => tagMetaKey(state, t)));
+        // Per-key GETs, not MGET: ISR tag keys are deliberately un-namespaced
+        // (cross-deploy semantics), so on Redis Cluster a multi-tag MGET is a
+        // guaranteed CROSSSLOT error — which the outer catch would silently
+        // swallow, disabling cross-instance revalidateTag for multi-tag
+        // entries. Auto-pipelining makes the fan-out one round trip anyway.
+        const values = await Promise.all(
+          tags.map((t) => client.get(tagMetaKey(state, t)))
+        );
         return values.map((v) => {
           if (!v) return null;
           try {

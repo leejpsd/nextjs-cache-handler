@@ -369,8 +369,16 @@ async function getImpl(
   if (freshnessTags.length > 0) {
     let mostRecent = 0;
     for (const t of freshnessTags) {
-      const ts = state.localTagTimestamps.get(t);
-      if (ts !== undefined && ts > mostRecent) mostRecent = ts;
+      // memTagExp is folded in deliberately: refreshTags rebuilds
+      // localTagTimestamps wholesale from scanned markers, and a pub/sub
+      // message whose PUBLISHER clock lags the local scanStart can be
+      // rejected by the carry-over while SCAN missed its just-written
+      // marker — memTagExp retains it (size-pruned, never scan-rebuilt).
+      const ts = Math.max(
+        state.localTagTimestamps.get(t) ?? 0,
+        state.memTagExp.get(t) ?? 0
+      );
+      if (ts > mostRecent) mostRecent = ts;
     }
     if (mostRecent > envelope.timestamp) {
       // Soft invalidation is stale-while-revalidate per spec §2.3#updateTags
@@ -594,20 +602,31 @@ async function ensureTagSubscription(state: HandlerState): Promise<void> {
       );
       return;
     }
-    const stop = await client.subscribe(invalChannel(state), (message) => {
-      try {
-        const parsed = JSON.parse(message) as { t?: string[]; ts?: number };
-        if (!Array.isArray(parsed.t) || typeof parsed.ts !== "number") return;
-        for (const tag of parsed.t) {
-          const prev = state.localTagTimestamps.get(tag) ?? 0;
-          if (parsed.ts > prev) state.localTagTimestamps.set(tag, parsed.ts);
-          const prevMem = state.memTagExp.get(tag) ?? 0;
-          if (parsed.ts > prevMem) state.memTagExp.set(tag, parsed.ts);
+    const stop = await client.subscribe(
+      invalChannel(state),
+      (message) => {
+        try {
+          const parsed = JSON.parse(message) as { t?: string[]; ts?: number };
+          if (!Array.isArray(parsed.t) || typeof parsed.ts !== "number") return;
+          for (const tag of parsed.t) {
+            const prev = state.localTagTimestamps.get(tag) ?? 0;
+            if (parsed.ts > prev) state.localTagTimestamps.set(tag, parsed.ts);
+            const prevMem = state.memTagExp.get(tag) ?? 0;
+            if (parsed.ts > prevMem) state.memTagExp.set(tag, parsed.ts);
+          }
+          // #11: keep the mirrors bounded between scans too.
+          pruneOldestByTimestamp(state.localTagTimestamps, MAX_LOCAL_TAG_ENTRIES);
+          pruneOldestByTimestamp(state.memTagExp, MAX_LOCAL_TAG_ENTRIES);
+        } catch {
+          // Malformed message — ignore; the scan will reconcile.
         }
-      } catch {
-        // Malformed message — ignore; the scan will reconcile.
+      },
+      () => {
+        // Subscriber connection died (failover/restart). Un-latch so the
+        // 5s retry path re-establishes; the scan covers the gap.
+        state.pubsub.active = false;
       }
-    });
+    );
     state.pubsub.active = true;
     state.pubsub.stop = async () => {
       state.pubsub.active = false;

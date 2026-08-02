@@ -48,7 +48,8 @@ export interface RedisClientLike {
    */
   subscribe?(
     channel: string,
-    onMessage: (message: string) => void
+    onMessage: (message: string) => void,
+    onDown?: () => void
   ): Promise<() => Promise<void>>;
   /**
    * Close the underlying connection without waiting for pending replies.

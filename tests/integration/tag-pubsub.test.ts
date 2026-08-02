@@ -44,7 +44,7 @@ for (const type of ["redis", "ioredis"] as const) {
       const latency = Date.now() - before;
       expect(learned).toBeGreaterThanOrEqual(before);
       expect(latency).toBeLessThan(1000);
-      // eslint-disable-next-line no-console
+       
       console.log(`[tagPubSub:${type}] cross-instance propagation ${latency}ms`);
     });
   });

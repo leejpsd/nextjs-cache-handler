@@ -114,20 +114,37 @@ function adapt(client: AnyRedis, isClusterClient = false): RedisClientLike {
       : {
           subscribe: async (
             channel: string,
-            onMessage: (message: string) => void
+            onMessage: (message: string) => void,
+            onDown?: () => void
           ) => {
             const sub = (client as Redis).duplicate();
-            sub.on("error", () => {
-              /* subscription manager handles retry */
-            });
-            if (sub.status !== "ready" && sub.status !== "connecting") {
-              await sub.connect();
+            let down = false;
+            const markDown = () => {
+              if (down) return;
+              down = true;
+              try {
+                sub.disconnect();
+              } catch {
+                /* already closed */
+              }
+              onDown?.();
+            };
+            sub.on("error", markDown);
+            sub.on("end", markDown);
+            try {
+              if (sub.status !== "ready" && sub.status !== "connecting") {
+                await sub.connect();
+              }
+              await sub.subscribe(channel);
+            } catch (err) {
+              markDown();
+              throw err;
             }
-            await sub.subscribe(channel);
             sub.on("message", (ch: string, message: string) => {
               if (ch === channel) onMessage(message);
             });
             return async () => {
+              down = true;
               sub.disconnect();
             };
           },

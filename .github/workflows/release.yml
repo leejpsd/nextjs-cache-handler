@@ -8,6 +8,11 @@ name: Release
 #                        below to enable)
 on:
   workflow_dispatch:
+    inputs:
+      publish_mcp:
+        description: "Publish mcp/ (@leejpsd/nextjs-cache-handler-mcp) instead of the main package"
+        type: boolean
+        default: false
   # push:
   #   branches: [main]
 
@@ -60,7 +65,16 @@ jobs:
           INTEGRATION_REDIS_URL: redis://127.0.0.1:6390
         run: npm run test:integration
 
+      - name: Publish MCP package (trusted publishing)
+        if: ${{ inputs.publish_mcp }}
+        working-directory: mcp
+        run: |
+          npm ci --no-audit --no-fund
+          npm test
+          npm publish --access public --provenance
+
       - name: Create Release Pull Request or Publish to npm
+        if: ${{ !inputs.publish_mcp }}
         uses: changesets/action@v1
         with:
           # publish: gets called when there are no changesets left to apply.
