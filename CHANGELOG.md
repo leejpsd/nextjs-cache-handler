@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.4.0
+
+### Minor Changes
+
+- [#7](https://github.com/leejpsd/nextjs-cache-handler/pull/7) [`bf047c9`](https://github.com/leejpsd/nextjs-cache-handler/commit/bf047c937985dafabed7c60ab1972a749a8f3b9f) Thanks [@leejpsd](https://github.com/leejpsd)! - Build-output cache seeding: `seedBuildOutput()` (new `/seed` entry point) and
+  `npx nextjs-cache-handler seed` walk `.next/` after a build and insert
+  prerendered App Router routes (including PPR segment data), Pages Router
+  routes, and fetch-cache entries into Redis in the handler's own record
+  format — with NX semantics so entries already written by live instances are
+  never overwritten. A fresh deployment's first requests are cache HITs
+  instead of a regeneration stampede (verified on a real Next 16 app: cold
+  server + seeded Redis → first request `x-nextjs-cache: HIT`). The
+  `RedisClientLike.set` contract gains an optional `NX` flag.
+
+- [#7](https://github.com/leejpsd/nextjs-cache-handler/pull/7) [`1e57e03`](https://github.com/leejpsd/nextjs-cache-handler/commit/1e57e03020926933f524796645b279d004dddf2a) Thanks [@leejpsd](https://github.com/leejpsd)! - New `nextjs-cache-handler` CLI (zero-dependency): `init` detects the Next.js
+  version and Redis client, generates the handler wrapper shims, shows the
+  next.config keys to add (never edits it), appends env templates, and injects
+  the agent rules block into CLAUDE.md/AGENTS.md idempotently (`--yes` to
+  apply, `--skills` to install the agent skill locally). `doctor` verifies
+  Redis connectivity, inspects cache key namespaces, and runs a write/read
+  round-trip — the first command an agent should reach for when debugging.
+
+- [#7](https://github.com/leejpsd/nextjs-cache-handler/pull/7) [`6cd5901`](https://github.com/leejpsd/nextjs-cache-handler/commit/6cd59010d30b55e8a5f9b99db8ec53b0e64e03ce) Thanks [@leejpsd](https://github.com/leejpsd)! - Opt-in push-based tag propagation (`tagPubSub: true`, plural handler):
+  `updateTags()` publishes invalidations on a namespaced channel and every
+  instance maintains a subscription on a dedicated duplicate connection,
+  updating its local tag mirror in ~3 ms (measured cross-instance over real
+  Redis with both redis@5 and ioredis) instead of waiting for the next
+  `refreshTags()` scan (~seconds). The scan keeps running as the consistency
+  safety net, so a dropped subscription degrades to the previous behavior —
+  never to staleness. Cluster clients fall back to polling with a one-time
+  warning. `RedisClientLike` gains optional `publish`/`subscribe`.
+
 ## 0.3.4
 
 ### Patch Changes
