@@ -89,3 +89,34 @@ describe("incremental/serialize — Buffer + Map preservation", () => {
     expect(deserializeCacheRecord("not json")).toBeNull();
   });
 });
+
+describe("Buffer encoding regression (0.4.1)", () => {
+  it("encodes Buffers as base64 envelopes, never as toJSON byte arrays", () => {
+    const html = Buffer.from("x".repeat(1000));
+    const s = serializeCacheRecord({ value: { html } });
+    expect(s).toContain('"__type":"Buffer"');
+    // toJSON leak would look like {"type":"Buffer","data":[120,120,...]}
+    expect(s).not.toMatch(/"type":"Buffer","data":\[/);
+  });
+
+  it("base64 encoding keeps payload near 4/3 of raw size (not ~3.7x byte arrays)", () => {
+    const buf = Buffer.alloc(30_000, 7);
+    const s = serializeCacheRecord({ buf });
+    expect(s.length).toBeLessThan(buf.length * 1.5);
+  });
+
+  it("still deserializes 0.4.0-era records written in toJSON shape", () => {
+    const legacy = '{"value":{"html":{"type":"Buffer","data":[104,105]}}}';
+    const rec = deserializeCacheRecord<{ value: { html: Buffer } }>(legacy)!;
+    expect(Buffer.isBuffer(rec.value.html)).toBe(true);
+    expect(rec.value.html.toString()).toBe("hi");
+  });
+
+  it("encodes Buffers nested inside Maps (PPR segmentData) as base64 too", () => {
+    const seg = new Map([["/x", Buffer.from("seg")]]);
+    const s = serializeCacheRecord({ value: { segmentData: seg } });
+    expect(s).not.toMatch(/"type":"Buffer","data":\[/);
+    const rec = deserializeCacheRecord<{ value: { segmentData: Map<string, Buffer> } }>(s)!;
+    expect(rec.value.segmentData.get("/x")?.toString()).toBe("seg");
+  });
+});

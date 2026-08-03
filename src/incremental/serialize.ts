@@ -43,11 +43,15 @@ function isLegacyBufferShape(value: unknown): value is LegacyBufferShape {
   );
 }
 
-function replacer(_key: string, value: unknown): unknown {
-  if (Buffer.isBuffer(value)) {
+function replacer(this: Record<string, unknown>, key: string, value: unknown): unknown {
+  // Buffer.prototype.toJSON runs BEFORE the replacer (JSON spec), so `value`
+  // is already { type: "Buffer", data: number[] } here. `this[key]` is the
+  // pre-toJSON original — the only place the real Buffer is still visible.
+  const raw = this[key];
+  if (Buffer.isBuffer(raw)) {
     const env: BufferEnvelope = {
       __type: "Buffer",
-      data: value.toString("base64"),
+      data: raw.toString("base64"),
     };
     return env;
   }
