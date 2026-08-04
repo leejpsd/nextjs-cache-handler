@@ -372,6 +372,15 @@ eventual implementation should converge on the same behavior.
 
 ---
 
+## Migrating from another cache handler
+
+Coming from `@neshca/cache-handler` (or its forks like
+`@jadkins89/next-cache-handler`)? There's a dedicated guide with a full
+API/concept mapping, config diff, and a seeding replacement:
+[docs/migrating-from-neshca.md](docs/migrating-from-neshca.md).
+
+---
+
 ## Compatibility
 
 - **Next.js**: `>=15.0.0 <17`
