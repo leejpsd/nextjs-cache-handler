@@ -118,7 +118,7 @@ export interface CacheComponentsHandler {
   getExpiration(tags: string[]): Promise<number>;
   updateTags(
     tags: string[],
-    durations?: { expire?: number }
+    durations?: { expire?: number | undefined }
   ): Promise<void>;
 }
 
@@ -861,7 +861,7 @@ async function getExpirationImpl(
 async function updateTagsImpl(
   state: HandlerState,
   tags: string[],
-  durations?: { expire?: number }
+  durations?: { expire?: number | undefined }
 ): Promise<void> {
   if (tags.length === 0) return;
   // Upstream polarity (revalidation-utils.js): NO durations means hard —

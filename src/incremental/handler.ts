@@ -500,7 +500,7 @@ export class IncrementalRedisCacheHandler {
 
   async revalidateTag(
     tags: string | string[],
-    durations?: { expire?: number }
+    durations?: { expire?: number | undefined }
   ): Promise<void> {
     const list = normalizeTags([tags].flat());
     if (list.length === 0) return;

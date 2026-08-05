@@ -176,7 +176,9 @@ for (const adapter of adapters) {
         const markerKey = `next-cache:tag-expiration:${NAMESPACE}:posts`;
         const raw = await client.get(markerKey);
         expect(raw).not.toBeNull();
-        const [stale, expired] = String(raw).split("|").map(Number);
+        const parts = String(raw).split("|").map(Number);
+        const stale = parts[0]!;
+        const expired = parts[1]!;
         expect(stale).toBeGreaterThan(0);
         expect(expired).toBe(stale + 3_600_000);
         // 0.4.1 readers parseInt the marker — must still see the stale stamp.
