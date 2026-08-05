@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!--
+      Source template for the package's social cards.
+      Two cards laid out vertically; the generator script captures each
+      one as an independent 1600x900 PNG by scrolling to it.
+    -->
+    <style>
+      @import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap");
+
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+
+      body {
+        font-family: "Inter", -apple-system, system-ui, sans-serif;
+        background: #000;
+        color: #fff;
+      }
+
+      .card {
+        width: 1600px;
+        height: 900px;
+        background:
+          radial-gradient(circle at 80% 20%, rgba(99, 102, 241, 0.15) 0%, transparent 50%),
+          radial-gradient(circle at 20% 80%, rgba(34, 197, 94, 0.08) 0%, transparent 50%),
+          #0a0a0a;
+        position: relative;
+        overflow: hidden;
+        padding: 64px 80px;
+        display: flex;
+        flex-direction: column;
+      }
+
+      /* ─── shared header ─── */
+      .card-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        margin-bottom: 12px;
+      }
+      .card-title {
+        font-family: "JetBrains Mono", monospace;
+        font-size: 38px;
+        font-weight: 700;
+        color: #fff;
+        letter-spacing: -0.5px;
+      }
+      .card-version {
+        font-family: "JetBrains Mono", monospace;
+        font-size: 22px;
+        font-weight: 500;
+        color: #9ca3af;
+      }
+      .card-subtitle {
+        font-size: 24px;
+        font-weight: 400;
+        color: #9ca3af;
+        margin-bottom: 36px;
+      }
+
+      .divider {
+        height: 1px;
+        background: linear-gradient(90deg, transparent, #374151, transparent);
+        margin-bottom: 32px;
+      }
+
+      /* ─── card 1: feature checklist ─── */
+      .checklist {
+        flex: 1;
+        display: grid;
+        grid-template-columns: 60px 1fr 1fr;
+        column-gap: 32px;
+        row-gap: 14px;
+        align-items: center;
+        font-size: 22px;
+        padding-top: 12px;
+      }
+      .check-icon {
+        color: #22c55e;
+        font-weight: 700;
+        font-size: 28px;
+        text-align: center;
+      }
+      .check-feature {
+        color: #fff;
+        font-weight: 600;
+      }
+      .check-desc {
+        color: #9ca3af;
+        font-size: 19px;
+      }
+      .check-feature code,
+      .check-desc code {
+        font-family: "JetBrains Mono", monospace;
+        font-size: 20px;
+        color: #c7d2fe;
+        background: rgba(99, 102, 241, 0.12);
+        padding: 2px 8px;
+        border-radius: 4px;
+      }
+      .check-desc code { font-size: 18px; }
+
+      .card-footer {
+        margin-top: 36px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      .card-footer .url {
+        font-family: "JetBrains Mono", monospace;
+        font-size: 20px;
+        color: #9ca3af;
+      }
+      .card-footer .tag {
+        font-family: "JetBrains Mono", monospace;
+        font-size: 18px;
+        color: #6b7280;
+      }
+
+      /* ─── card 2: hero ─── */
+      .card.hero {
+        justify-content: center;
+        align-items: center;
+        text-align: center;
+        padding: 80px;
+      }
+      .card.hero .hero-name {
+        font-family: "JetBrains Mono", monospace;
+        font-size: 56px;
+        font-weight: 700;
+        color: #fff;
+        margin-bottom: 24px;
+      }
+      .card.hero .hero-tagline {
+        font-size: 32px;
+        font-weight: 400;
+        color: #d1d5db;
+        line-height: 1.4;
+        max-width: 1100px;
+        margin: 0 auto 56px;
+      }
+      .card.hero .hero-tagline em {
+        color: #60a5fa;
+        font-style: normal;
+        font-weight: 600;
+      }
+      .card.hero .hero-tagline code {
+        font-family: "JetBrains Mono", monospace;
+        font-size: 28px;
+        color: #c7d2fe;
+        background: rgba(99, 102, 241, 0.12);
+        padding: 2px 10px;
+        border-radius: 6px;
+      }
+      .card.hero .hero-install {
+        font-family: "JetBrains Mono", monospace;
+        font-size: 24px;
+        color: #c7d2fe;
+        background: rgba(99, 102, 241, 0.12);
+        border: 1px solid rgba(99, 102, 241, 0.3);
+        padding: 18px 28px;
+        border-radius: 10px;
+        display: inline-block;
+        margin-bottom: 56px;
+      }
+      .card.hero .hero-footer {
+        font-family: "JetBrains Mono", monospace;
+        font-size: 20px;
+        color: #9ca3af;
+      }
+      .card.hero .hero-footer .dot { color: #4b5563; margin: 0 14px; }
+
+      /* sit them stacked so the puppeteer/playwright script can target each */
+      .stack { display: block; }
+      #card-matrix, #card-hero { margin: 0; }
+    </style>
+  </head>
+  <body>
+    <div class="stack">
+      <!-- ============================================================ -->
+      <!-- Card 1: feature checklist (self-only, no comparisons)         -->
+      <!-- ============================================================ -->
+      <div id="card-matrix" class="card">
+        <div class="card-header">
+          <div class="card-title">@leejpsd/nextjs-cache-handler</div>
+          <div class="card-version">v0.2.0</div>
+        </div>
+        <div class="card-subtitle">Redis cache handler for Next.js 16 self-hosting</div>
+        <div class="divider"></div>
+
+        <div class="checklist">
+          <div class="check-icon">✓</div>
+          <div class="check-feature"><code>cacheHandler</code> (singular)</div>
+          <div class="check-desc">ISR, Pages Router, on-demand revalidation</div>
+
+          <div class="check-icon">✓</div>
+          <div class="check-feature"><code>cacheHandlers</code> (plural)</div>
+          <div class="check-desc"><code>'use cache'</code>, <code>cacheComponents</code></div>
+
+          <div class="check-icon">✓</div>
+          <div class="check-feature">All Next.js 16 directives</div>
+          <div class="check-desc"><code>'use cache: remote'</code>, <code>'use cache: private'</code></div>
+
+          <div class="check-icon">✓</div>
+          <div class="check-feature">Build-phase skip</div>
+          <div class="check-desc"><code>next build</code> succeeds without Redis</div>
+
+          <div class="check-icon">✓</div>
+          <div class="check-feature">Auto deploy isolation</div>
+          <div class="check-desc"><code>BUILD_NAMESPACE</code> from env, zero-config</div>
+
+          <div class="check-icon">✓</div>
+          <div class="check-feature">Lua-atomic SET + tag</div>
+          <div class="check-desc"><code>set-with-tags</code>, <code>revalidate-hard</code></div>
+
+          <div class="check-icon">✓</div>
+          <div class="check-feature">Single-flight refresh lock</div>
+          <div class="check-desc">opt-in stampede protection (v0.2)</div>
+
+          <div class="check-icon">✓</div>
+          <div class="check-feature">AbortSignal timeout</div>
+          <div class="check-desc">1500ms default, per-op control</div>
+
+          <div class="check-icon">✓</div>
+          <div class="check-feature">OpenTelemetry hook</div>
+          <div class="check-desc"><code>onMetric</code> event stream, bounded cardinality</div>
+
+          <div class="check-icon">✓</div>
+          <div class="check-feature">Live-traffic dogfood</div>
+          <div class="check-desc">24h AWS ECS Fargate, ElastiCache Redis</div>
+        </div>
+
+        <div class="card-footer">
+          <div class="url">github.com/leejpsd/nextjs-cache-handler</div>
+          <div class="tag">MIT · v0.2.0</div>
+        </div>
+      </div>
+
+      <!-- ============================================================ -->
+      <!-- Card 2: hero                                                   -->
+      <!-- ============================================================ -->
+      <div id="card-hero" class="card hero">
+        <div class="hero-name">@leejpsd/nextjs-cache-handler</div>
+        <div class="hero-tagline">
+          A Redis cache handler for <em>Next.js 16</em> self-hosting —
+          both <code>cacheHandler</code> (ISR) and <code>cacheHandlers</code>
+          (the <code>'use cache'</code> directive + <code>cacheComponents</code>)
+          in one package.
+        </div>
+        <div class="hero-install">npm install @leejpsd/nextjs-cache-handler</div>
+        <div class="hero-footer">
+          v0.2.0
+          <span class="dot">·</span>
+          MIT
+          <span class="dot">·</span>
+          github.com/leejpsd/nextjs-cache-handler
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

@@ -58,6 +58,51 @@ const FALLBACK_TTL_SEC = 3600;
  *  can still observe an invalidation that happened in the previous deploy. */
 const TAG_EXP_MARKER_TTL_SEC = 60 * 60 * 24 * 7; // 7 days
 
+/**
+ * Per-tag invalidation state, mirroring the built-in handler's
+ * `{ stale, expired }` pair (next/dist/server/lib/cache-handlers/default.js):
+ *   s — when the tag was last invalidated. Entries older than this are STALE
+ *       (served with `revalidate: -1` so Next refreshes them in the background).
+ *   e — when those stale entries stop being servable at all (hard deadline).
+ *       Hard invalidations (updateTag / no-durations updateTags) set e === s;
+ *       soft ones set e = s + durations.expire * 1000 (Infinity = never).
+ */
+interface TagState {
+  s: number;
+  e: number;
+}
+
+/**
+ * Wire format: `"<s>|<e>"` with `e === Infinity` encoded as `inf`.
+ * Chosen for cross-version safety: 0.4.1 readers `Number.parseInt` the
+ * marker, and `parseInt("123|456") === 123`, so old instances see the stale
+ * stamp and keep their old (serve-stale) behavior, while hard invalidations
+ * still take effect for them through the Lua entry deletion.
+ * Legacy bare-number markers decode as `{ s: n, e: n }` (hard-at-n) — the
+ * conservative direction: at worst an old soft invalidation costs one extra
+ * regeneration instead of ever serving something it shouldn't.
+ */
+function encodeTagMarker(state: TagState): string {
+  return `${state.s}|${state.e === Infinity ? "inf" : state.e}`;
+}
+
+function decodeTagMarker(raw: string): TagState | null {
+  const s = Number.parseInt(raw, 10);
+  if (!Number.isFinite(s)) return null;
+  const sep = raw.indexOf("|");
+  if (sep === -1) return { s, e: s }; // legacy 0.4.1 marker
+  const tail = raw.slice(sep + 1);
+  if (tail === "inf") return { s, e: Infinity };
+  const e = Number.parseInt(tail, 10);
+  return { s, e: Number.isFinite(e) ? e : s };
+}
+
+/** Monotonic merge: never move a tag's state backwards in time. */
+function mergeTagState(map: Map<string, TagState>, tag: string, next: TagState): void {
+  const prev = map.get(tag);
+  if (!prev || next.s > prev.s) map.set(tag, next);
+}
+
 // ─── Public factory contract ─────────────────────────────────────────────────
 
 export interface CacheComponentsHandler {
@@ -104,9 +149,9 @@ interface HandlerState {
   /** Memory tag-set index for memory fallback path. */
   memTags: MemorySetStore;
   /** Memory tag-expiration timestamps. Mirrors next-cache:tag-expiration:*. */
-  memTagExp: Map<string, number>;
+  memTagExp: Map<string, TagState>;
   /** Local mirror of recent tag invalidations refreshed from Redis. */
-  localTagTimestamps: Map<string, number>;
+  localTagTimestamps: Map<string, TagState>;
   /** tagPubSub subscription state (opt-in acceleration; polling remains). */
   pubsub: {
     active: boolean;
@@ -367,31 +412,28 @@ async function getImpl(
     softTags.length > 0 ? [...softTags, ...envelope.tags] : envelope.tags;
   let tagStale = false;
   if (freshnessTags.length > 0) {
-    let mostRecent = 0;
+    const now = Date.now();
     for (const t of freshnessTags) {
       // memTagExp is folded in deliberately: refreshTags rebuilds
       // localTagTimestamps wholesale from scanned markers, and a pub/sub
       // message whose PUBLISHER clock lags the local scanStart can be
       // rejected by the carry-over while SCAN missed its just-written
       // marker — memTagExp retains it (size-pruned, never scan-rebuilt).
-      const ts = Math.max(
-        state.localTagTimestamps.get(t) ?? 0,
-        state.memTagExp.get(t) ?? 0
-      );
-      if (ts > mostRecent) mostRecent = ts;
-    }
-    if (mostRecent > envelope.timestamp) {
-      // Soft invalidation is stale-while-revalidate per spec §2.3#updateTags
-      // ("entries can stay; subsequent reads treat them as stale"): keep
-      // serving the entry but classify it stale so it flows through the
-      // background-refresh path below. Only when SWR is disabled (or the
-      // entry is already hard-expired) do we degrade to a miss.
-      if (state.opts.staleWhileRevalidate && partition.freshness !== "expired") {
-        tagStale = true;
-      } else {
+      const local = state.localTagTimestamps.get(t);
+      const mem = state.memTagExp.get(t);
+      const st = local && mem ? (local.s >= mem.s ? local : mem) : (local ?? mem);
+      if (!st || st.s <= envelope.timestamp) continue;
+      // Tag invalidated after this entry was written. Hard deadline passed
+      // (hard invalidations have e === s, so they land here immediately)
+      // → the entry must never be served again. Before the deadline it is
+      // soft-stale: served regardless of the staleWhileRevalidate option,
+      // because serve-while-refreshing is the upstream contract for
+      // profile-based revalidation, not a handler feature toggle.
+      if (now >= st.e || partition.freshness === "expired") {
         state.emit({ type: "cache.miss", meta: { reason: "tag-invalidated" } });
         return undefined;
       }
+      tagStale = true;
     }
   }
 
@@ -428,24 +470,19 @@ async function getImpl(
     });
   }
 
-  // When stale because of a tag invalidation (not time), present the entry as
-  // just past its `revalidate` boundary so Next serves it immediately AND
-  // schedules a background re-render (true SWR). Time-stale entries already
-  // satisfy this through their real timestamp. The Math.min guard never makes
-  // an entry look fresher than it actually is.
-  const revalidateMs = Math.max(0, envelope.revalidate) * 1000;
-  const outTimestamp = tagStale
-    ? Math.min(envelope.timestamp, Date.now() - revalidateMs - 1)
-    : envelope.timestamp;
-
-  // Reconstruct stream and return.
+  // When stale because of a tag invalidation (not time), keep the truthful
+  // timestamp and return `revalidate: -1` — the built-in handler's signal for
+  // "serve this, but force a background refresh". Backdating the timestamp
+  // (the pre-0.4.2 approach) could cross the `expire` boundary on profiles
+  // where expire − revalidate is small (blocking discard instead of SWR) and
+  // made the implicit-tags comparison in shouldDiscardCacheEntry see a lie.
   return {
     value: bufferToStream(Buffer.from(envelope.value, "base64")),
     tags: envelope.tags,
     stale: envelope.stale,
-    timestamp: outTimestamp,
+    timestamp: envelope.timestamp,
     expire: envelope.expire,
-    revalidate: envelope.revalidate,
+    revalidate: tagStale ? -1 : envelope.revalidate,
   };
 }
 
@@ -465,6 +502,16 @@ async function setImpl(
       message: (err as Error).message,
     });
     state.emit({ type: "cache.set.failed", meta: { reason: "pending-rejected" } });
+    return;
+  }
+
+  // In production an `expire: 0` entry is dynamic: the "use cache" wrapper
+  // regenerates it on every read, so persisting it is a wasted write of a
+  // value that is never served back (mirrors the 16.3 built-in handler).
+  // The dev server keeps it: its retention floor serves the previous value
+  // across reloads.
+  if (entry.expire === 0 && !process.env.__NEXT_DEV_SERVER) {
+    state.emit({ type: "cache.set.skipped", meta: { reason: "dynamic-entry" } });
     return;
   }
 
@@ -606,13 +653,22 @@ async function ensureTagSubscription(state: HandlerState): Promise<void> {
       invalChannel(state),
       (message) => {
         try {
-          const parsed = JSON.parse(message) as { t?: string[]; ts?: number };
+          const parsed = JSON.parse(message) as {
+            t?: string[];
+            ts?: number;
+            e?: number;
+          };
           if (!Array.isArray(parsed.t) || typeof parsed.ts !== "number") return;
+          // No `e` = soft with no deadline. That is exactly right for legacy
+          // 0.4.1 publishers too: their hard path already deleted the entries
+          // via Lua, so the subscriber's only job is staleness marking.
+          const incoming: TagState = {
+            s: parsed.ts,
+            e: typeof parsed.e === "number" ? parsed.e : Infinity,
+          };
           for (const tag of parsed.t) {
-            const prev = state.localTagTimestamps.get(tag) ?? 0;
-            if (parsed.ts > prev) state.localTagTimestamps.set(tag, parsed.ts);
-            const prevMem = state.memTagExp.get(tag) ?? 0;
-            if (parsed.ts > prevMem) state.memTagExp.set(tag, parsed.ts);
+            mergeTagState(state.localTagTimestamps, tag, incoming);
+            mergeTagState(state.memTagExp, tag, incoming);
           }
           // #11: keep the mirrors bounded between scans too.
           pruneOldestByTimestamp(state.localTagTimestamps, MAX_LOCAL_TAG_ENTRIES);
@@ -672,7 +728,7 @@ async function refreshTagsImpl(state: HandlerState): Promise<void> {
           `${state.opts.keyPrefix}${TAG_EXP_SUFFIX}${ns}:`
         )}*`;
         const scanStartMs = Date.now();
-        const fresh = new Map<string, number>();
+        const fresh = new Map<string, TagState>();
         for await (const chunk of client.scanIterator({
           MATCH: pattern,
           COUNT: 100,
@@ -685,20 +741,20 @@ async function refreshTagsImpl(state: HandlerState): Promise<void> {
           for (let i = 0; i < keys.length; i += 1) {
             const v = values[i];
             if (!v) continue;
-            const ts = Number.parseInt(v, 10);
-            if (!Number.isFinite(ts)) continue;
+            const st = decodeTagMarker(v);
+            if (!st) continue;
             // Strip prefix back to bare tag name.
             const key = keys[i];
             if (key === undefined) continue;
             const tag = stripExpPrefix(state, key);
-            if (tag) fresh.set(tag, ts);
+            if (tag) fresh.set(tag, st);
           }
         }
         // Invalidations recorded locally while the scan ran may not have had
         // visible markers yet — carry them over so they aren't lost.
-        for (const [tag, ts] of state.localTagTimestamps) {
-          if (ts >= scanStartMs && (fresh.get(tag) ?? 0) < ts) {
-            fresh.set(tag, ts);
+        for (const [tag, st] of state.localTagTimestamps) {
+          if (st.s >= scanStartMs && (fresh.get(tag)?.s ?? 0) < st.s) {
+            fresh.set(tag, st);
           }
         }
         // Wholesale replacement keeps the mirror bounded by live-marker
@@ -725,11 +781,11 @@ const MAX_LOCAL_TAG_ENTRIES = 10_000;
 
 /** Drop the oldest-timestamped entries until the map fits the cap. */
 function pruneOldestByTimestamp(
-  map: Map<string, number>,
+  map: Map<string, TagState>,
   maxEntries: number
 ): void {
   if (map.size <= maxEntries) return;
-  const byAge = [...map.entries()].sort((a, b) => a[1] - b[1]);
+  const byAge = [...map.entries()].sort((a, b) => a[1].s - b[1].s);
   const drop = map.size - maxEntries;
   for (let i = 0; i < drop; i += 1) {
     const entry = byAge[i];
@@ -753,12 +809,16 @@ async function getExpirationImpl(
 ): Promise<number> {
   if (tags.length === 0) return 0;
 
+  // Mirror the built-in handler's getExpiration: report only the HARD
+  // deadline (`entry.expired || 0` in default.js). The stale stamp is a
+  // get()-side concern (served with revalidate: -1); reporting it here would
+  // make Next discard soft-invalidated entries instead of refreshing them.
   let max = 0;
   for (const t of tags) {
     const local = state.localTagTimestamps.get(t);
-    if (local !== undefined && local > max) max = local;
+    if (local && Number.isFinite(local.e) && local.e > max) max = local.e;
     const mem = state.memTagExp.get(t);
-    if (mem !== undefined && mem > max) max = mem;
+    if (mem && Number.isFinite(mem.e) && mem.e > max) max = mem.e;
   }
   if (max > 0) {
     state.emit({ type: "tag.expiration.read", meta: { source: "local", count: tags.length } });
@@ -784,8 +844,8 @@ async function getExpirationImpl(
         let m = 0;
         for (const v of values) {
           if (!v) continue;
-          const n = Number.parseInt(v, 10);
-          if (Number.isFinite(n) && n > m) m = n;
+          const st = decodeTagMarker(v);
+          if (st && Number.isFinite(st.e) && st.e > m) m = st.e;
         }
         return m;
       }
@@ -804,13 +864,26 @@ async function updateTagsImpl(
   durations?: { expire?: number }
 ): Promise<void> {
   if (tags.length === 0) return;
-  const isHardExpire = durations?.expire === 0;
+  // Upstream polarity (revalidation-utils.js): NO durations means hard —
+  // updateTag() and single-arg revalidateTag() must never serve the entry
+  // again. durations={expire: N} is the profile-based soft path
+  // (revalidateTag(tag, "max")): stale now, hard-expire N seconds later.
+  // durations={expire: undefined} (custom profile without expire) is soft
+  // with no deadline, matching the built-in handler leaving `expired` unset.
+  const isHardExpire = durations === undefined || durations.expire === 0;
   const now = Date.now();
+  const deadline = isHardExpire
+    ? now
+    : durations.expire !== undefined && Number.isFinite(durations.expire)
+      ? now + durations.expire * 1000
+      : Infinity;
+  const tagState: TagState = { s: now, e: deadline };
+  const marker = encodeTagMarker(tagState);
 
   // Local mirror update first — guarantees read-after-write within instance.
   for (const t of tags) {
-    state.localTagTimestamps.set(t, now);
-    state.memTagExp.set(t, now);
+    mergeTagState(state.localTagTimestamps, t, tagState);
+    mergeTagState(state.memTagExp, t, tagState);
   }
   // memTagExp has no scan-based rebuild to shed dead tags (refreshTags only
   // replaces localTagTimestamps), so cap it here against unbounded growth in
@@ -862,9 +935,9 @@ async function updateTagsImpl(
                   client,
                   "revalidateHard",
                   [tagKey(state, t), tagExpKey(state, t)],
-                  [String(now), String(TAG_EXP_MARKER_TTL_SEC)]
+                  [marker, String(TAG_EXP_MARKER_TTL_SEC)]
                 )
-              : client.set(tagExpKey(state, t), String(now), {
+              : client.set(tagExpKey(state, t), marker, {
                   EX: TAG_EXP_MARKER_TTL_SEC,
                 })
           )
@@ -881,9 +954,15 @@ async function updateTagsImpl(
       // correctness (markers are already written).
       try {
         const client = await state.conn.getOrConnect();
+        // `e` is the hard deadline (ms). Omitted when Infinity — legacy
+        // 0.4.1 subscribers ignore unknown fields either way.
         await client?.publish?.(
           invalChannel(state),
-          JSON.stringify({ t: tags, ts: now })
+          JSON.stringify(
+            deadline === Infinity
+              ? { t: tags, ts: now }
+              : { t: tags, ts: now, e: deadline }
+          )
         );
       } catch {
         /* scan reconciles */

@@ -111,9 +111,13 @@ function explain(key: string): Record<string, string> {
   return { layer: "unknown", kind: "?", namespace: "?", key };
 }
 
+import { createRequire } from "node:module";
+
+const pkgVersion: string = createRequire(import.meta.url)("../package.json").version;
+
 const server = new McpServer({
   name: "nextjs-cache-handler",
-  version: "0.1.0",
+  version: pkgVersion,
 });
 
 server.tool(

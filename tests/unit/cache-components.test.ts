@@ -148,9 +148,16 @@ describe("cacheHandlers — error policy (spec §6)", () => {
     ).rejects.toBeTruthy();
   });
 
-  it("updateTags() soft path swallows errors", async () => {
+  it("updateTags() soft path (profile durations) swallows errors", async () => {
     const { handler } = setup({ failNext: 1 });
-    await expect(handler.updateTags(["t"])).resolves.toBeUndefined();
+    await expect(
+      handler.updateTags(["t"], { expire: 60 })
+    ).resolves.toBeUndefined();
+  });
+
+  it("updateTags() with no durations is HARD and propagates errors", async () => {
+    const { handler } = setup({ failNext: 1 });
+    await expect(handler.updateTags(["t"])).rejects.toBeTruthy();
   });
 
   it("set() discards entries when stream errors mid-read", async () => {
@@ -190,17 +197,24 @@ describe("cacheHandlers — build phase skip (PR #207 regression)", () => {
 });
 
 describe("cacheHandlers — soft tag freshness (spec §2.3)", () => {
-  it("serves the entry as STALE (SWR) when a soft tag was invalidated after entry timestamp", async () => {
+  it("misses when an implicit tag was HARD-invalidated (revalidatePath) after the entry", async () => {
     const { handler, events } = setup();
     await handler.set("k", Promise.resolve(makeEntry()));
-    // Simulate revalidatePath('/blog') firing after the entry was written.
-    // Soft invalidation is stale-while-revalidate per spec §2.3#updateTags;
-    // Next additionally hard-discards implicit tags via getExpiration, so
-    // serving stale here is defense in depth, not user-visible staleness.
+    // revalidatePath('/blog') → updateTags with NO durations → hard.
     vi.setSystemTime(new Date(T0 + 10));
     await handler.updateTags(["_N_T_/blog"]);
+    expect(await handler.get("k", ["_N_T_/blog"])).toBeUndefined();
+    expect(events.some((e) => e.type === "cache.miss")).toBe(true);
+  });
+
+  it("serves the entry as STALE (SWR) when an implicit tag was SOFT-invalidated", async () => {
+    const { handler, events } = setup();
+    await handler.set("k", Promise.resolve(makeEntry()));
+    vi.setSystemTime(new Date(T0 + 10));
+    await handler.updateTags(["_N_T_/blog"], { expire: 3600 });
     const got = await handler.get("k", ["_N_T_/blog"]);
     expect(got).toBeDefined();
+    expect(got!.revalidate).toBe(-1);
     expect(events.some((e) => e.type === "cache.stale")).toBe(true);
   });
 
@@ -229,9 +243,9 @@ describe("cacheHandlers — explicit tag soft revalidation (#1 regression)", () 
       )
     );
 
-    // revalidateTag("posts", "max") → updateTags(["posts"]) with no expire: 0.
+    // revalidateTag("posts", "max") → updateTags(["posts"], { expire: Infinity }).
     vi.setSystemTime(new Date(T0 + 10));
-    await handler.updateTags(["posts"]);
+    await handler.updateTags(["posts"], { expire: Infinity });
 
     // Next reads with NO soft tags (explicit tags are not soft tags). The
     // entry must be SERVED (not a miss) but classified stale for refresh.
@@ -240,11 +254,10 @@ describe("cacheHandlers — explicit tag soft revalidation (#1 regression)", () 
     expect(events.some((e) => e.type === "cache.stale")).toBe(true);
     expect(events.some((e) => e.type === "cache.miss")).toBe(false);
 
-    // Returned timestamp is backdated past `revalidate` (within `expire`) so
-    // Next schedules the background refresh — true SWR, not a blocking miss.
-    const ageMs = Date.now() - got!.timestamp;
-    expect(ageMs).toBeGreaterThan(got!.revalidate * 1000);
-    expect(ageMs).toBeLessThanOrEqual(got!.expire * 1000);
+    // Truthful timestamp + revalidate: -1 is the refresh signal (mirrors the
+    // built-in handler) — true SWR, not a blocking miss.
+    expect(got!.timestamp).toBe(T0);
+    expect(got!.revalidate).toBe(-1);
   });
 
   it("treats a soft explicit-tag invalidation as a miss when SWR is disabled", async () => {
@@ -291,7 +304,7 @@ describe("cacheHandlers — explicit tag soft revalidation (#1 regression)", () 
 
     await a.set("k", Promise.resolve(makeEntry({ tags: ["posts"] })));
     vi.setSystemTime(new Date(T0 + 10));
-    await a.updateTags(["posts"]); // writes the shared marker
+    await a.updateTags(["posts"], { expire: 3600 }); // soft — writes the shared marker
 
     await b.refreshTags(); // B pulls the marker from Redis
     const got = await b.get("k", []);
@@ -300,23 +313,23 @@ describe("cacheHandlers — explicit tag soft revalidation (#1 regression)", () 
   });
 });
 
-describe("cacheHandlers — tag-stale backdating invariants", () => {
-  it("backdated timestamp stays inside the expire window (SWR, not discard)", async () => {
+describe("cacheHandlers — tag-stale signaling (revalidate: -1)", () => {
+  it("keeps the truthful timestamp and signals refresh via revalidate: -1", async () => {
     const { handler } = setup();
     await handler.set(
       "k",
       Promise.resolve(makeEntry({ tags: ["posts"], revalidate: 60, expire: 3600 }))
     );
     vi.setSystemTime(new Date(T0 + 10));
-    await handler.updateTags(["posts"]);
+    await handler.updateTags(["posts"], { expire: 3600 });
 
     const got = await handler.get("k", []);
     expect(got).toBeDefined();
-    const ageMs = Date.now() - got!.timestamp;
-    // Just past revalidate — Next schedules a refresh — but well inside
-    // expire, so the entry is served rather than discarded.
-    expect(ageMs).toBeGreaterThan(60 * 1000);
-    expect(ageMs).toBeLessThan(3600 * 1000);
+    // Truthful timestamp: never crosses the expire boundary regardless of
+    // how small expire - revalidate is, and shouldDiscardCacheEntry's
+    // implicit-tags comparison sees the real write time.
+    expect(got!.timestamp).toBe(T0);
+    expect(got!.revalidate).toBe(-1);
   });
 
   it("degenerate expire === revalidate: invalidation degrades to a miss on the following read (no stale-forever loop)", async () => {
@@ -539,11 +552,12 @@ describe("cacheHandlers — refreshTags tag propagation", () => {
   it("keeps locally recorded invalidations that have no visible marker yet", async () => {
     const { handler, client } = setup();
     client.failNext(1); // marker SET fails → only the local mirror knows
-    await handler.updateTags(["fresh-local"]);
+    await handler.updateTags(["fresh-local"], { expire: 60 });
 
     await handler.refreshTags(); // scan finds no marker for the tag
 
-    expect(await handler.getExpiration(["fresh-local"])).toBe(T0);
+    // getExpiration reports the hard deadline (s + expire).
+    expect(await handler.getExpiration(["fresh-local"])).toBe(T0 + 60_000);
   });
 });
 

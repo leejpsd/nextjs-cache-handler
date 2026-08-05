@@ -125,6 +125,7 @@ export type MetricEventType =
   | "cache.stale.refresh.follower"
   | "cache.set"
   | "cache.set.failed"
+  | "cache.set.skipped"
   | "tag.invalidate.soft"
   | "tag.invalidate.hard"
   | "tag.expiration.read"
@@ -224,6 +225,12 @@ export interface CacheHandlerOptions {
    * (`revalidate < age < expire`) while Next.js triggers a background refresh.
    *
    * Default: `true`. Set to `false` to revert to "expire on revalidate" behavior.
+   */
+  /**
+   * Governs TIME-based staleness only (serve-stale within revalidate..expire).
+   * Since 0.4.2 tag invalidation ignores this option: soft (profile-based)
+   * invalidations always serve-while-revalidating and hard ones always miss —
+   * that split is the upstream contract, not a handler feature.
    */
   staleWhileRevalidate?: boolean;
 

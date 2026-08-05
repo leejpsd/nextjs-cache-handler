@@ -1,12 +1,13 @@
 -- revalidate-hard.lua
 --
 -- Atomically remove every entry referenced by a tag and stamp the tag's
--- expiration marker. Used by `updateTags(tags, { expire: 0 })` — the hard
--- invalidation path triggered by `updateTag()` server actions in Next.js 16.
+-- expiration marker. Used by the hard invalidation path — `updateTags(tags)`
+-- with no durations (updateTag(), single-arg revalidateTag()) or an explicit
+-- `{ expire: 0 }`.
 --
 -- KEYS[1]   : tag set key (e.g. "next-cache:tag:posts")
 -- KEYS[2]   : tag-expiration marker key (e.g. "next-cache:tag-expiration:posts")
--- ARGV[1]   : current timestamp in milliseconds
+-- ARGV[1]   : marker value "<staleMs>|<expiredMs>" (hard: both equal)
 -- ARGV[2]   : marker TTL in seconds (default: 1 day so cross-deployment
 --             readers can still observe the invalidation)
 --
@@ -14,7 +15,7 @@
 
 local tagKey = KEYS[1]
 local markerKey = KEYS[2]
-local nowMs = ARGV[1]
+local marker = ARGV[1]
 local markerTtl = tonumber(ARGV[2])
 
 local entries = redis.call('SMEMBERS', tagKey)
@@ -32,6 +33,6 @@ redis.call('DEL', tagKey)
 -- Stamp the invalidation timestamp. Readers compare this against an entry's
 -- timestamp inside `getExpiration` to decide whether soft-tag-only entries
 -- should be considered stale.
-redis.call('SET', markerKey, nowMs, 'EX', markerTtl)
+redis.call('SET', markerKey, marker, 'EX', markerTtl)
 
 return deleted

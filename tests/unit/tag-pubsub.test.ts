@@ -58,12 +58,13 @@ describe("cacheHandlers — tagPubSub push propagation", () => {
 
     await a.set("k", Promise.resolve(entry({ tags: ["posts"] })));
     vi.setSystemTime(new Date(T0 + 10));
-    await a.updateTags(["posts"]); // soft — publishes on the inval channel
+    await a.updateTags(["posts"], { expire: 3600 }); // soft — publishes on the inval channel
 
     // NO b.refreshTags() here — the push alone must inform B.
     const got = await b.get("k", []);
     expect(got).toBeDefined(); // soft = SWR serve...
-    expect(await b.getExpiration(["posts"])).toBe(T0 + 10); // ...and B knows the timestamp
+    expect(got!.revalidate).toBe(-1); // ...flagged for background refresh...
+    expect(await b.getExpiration(["posts"])).toBe(T0 + 10 + 3_600_000); // ...and B knows the deadline
   });
 
   it("push updates never move a tag timestamp backwards", async () => {

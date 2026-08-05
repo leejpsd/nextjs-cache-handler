@@ -169,14 +169,18 @@ for (const adapter of adapters) {
       "updateTags soft path leaves entries reachable but bumps tag expiration",
       async () => {
         await handler.set("rt-4", Promise.resolve(makeEntry()));
-        await handler.updateTags(["posts"]); // no durations → soft
+        await handler.updateTags(["posts"], { expire: 3600 }); // profile durations → soft
 
-        // Entry is still reachable until natural revalidate; we verify by
-        // checking the marker key was written.
+        // Entry is still reachable (soft = serve-while-revalidate); verify the
+        // "<stale>|<expired>" marker was written and parses on both sides.
         const markerKey = `next-cache:tag-expiration:${NAMESPACE}:posts`;
         const raw = await client.get(markerKey);
         expect(raw).not.toBeNull();
-        expect(Number(raw)).toBeGreaterThan(0);
+        const [stale, expired] = String(raw).split("|").map(Number);
+        expect(stale).toBeGreaterThan(0);
+        expect(expired).toBe(stale + 3_600_000);
+        // 0.4.1 readers parseInt the marker — must still see the stale stamp.
+        expect(Number.parseInt(String(raw), 10)).toBe(stale);
       }
     );
 

@@ -3,18 +3,20 @@
 [![npm](https://img.shields.io/npm/v/@leejpsd/nextjs-cache-handler.svg)](https://www.npmjs.com/package/@leejpsd/nextjs-cache-handler)
 [![license](https://img.shields.io/npm/l/@leejpsd/nextjs-cache-handler.svg)](./LICENSE)
 
-> **`v0.3.0`** — install with
-> `npm install @leejpsd/nextjs-cache-handler`. Production-validated against
-> AWS ECS Fargate with multi-instance Redis (v0.1: 24h live-traffic soak;
-> v0.3: fresh multi-instance verification incl. a live Redis-reboot drill
-> with zero 5xx — see
-> [`docs/staging-verification-2026-08-01.md`](./docs/staging-verification-2026-08-01.md)).
+> **`v0.4.2`** — install with
+> `npm install @leejpsd/nextjs-cache-handler`, or wire everything with
+> `npx nextjs-cache-handler init --yes`. Production-validated against
+> AWS ECS Fargate with multi-instance Redis (24h live-traffic soak and a
+> live Redis-reboot drill with zero 5xx — see
+> [`docs/staging-verification-2026-08-01.md`](./docs/staging-verification-2026-08-01.md)),
+> and exercised end-to-end against **Next.js 16.3** (both cache interfaces).
 >
-> v0.3 adds: **Next.js 15 support** (ISR handler), **reconnect with
-> exponential backoff** (no more permanent memory-only latch), **request-scoped
-> GET deduplication**, transparent **gzip/brotli compression**, **Redis
-> Sentinel** support, a built-in **OpenTelemetry emitter** at `/otel`, and an
-> LRU-bounded memory fallback.
+> v0.4 adds: **build-output cache seeding** (first request after deploy is a
+> HIT), **pub/sub tag propagation** (~3ms cross-instance), **Redis Cluster**
+> e2e in CI, a **CLI** (`init` / `doctor` / `seed`), and agent-native assets
+> (skill, rules, [MCP server](https://www.npmjs.com/package/@leejpsd/nextjs-cache-handler-mcp)).
+> 0.4.2 aligns tag invalidation exactly with upstream semantics
+> (`updateTag()` hard vs `revalidateTag(tag, "max")` soft — see CHANGELOG).
 
 ## 🤖 For AI agents
 
@@ -87,7 +89,7 @@ plural interface as ❌ **"Not yet supported - Help needed"**:
 > [`nextjs-turbo-redis-cache`](https://github.com/trieb-work/nextjs-turbo-redis-cache#features)
 > directly before relying on this comparison.
 
-| Feature | this (0.3.0) | @fortedigital 3.2.1 | nextjs-turbo-redis-cache 1.15 |
+| Feature | this (0.4.x) | @fortedigital 3.2.1 | nextjs-turbo-redis-cache 1.15 |
 |---|---|---|---|
 | `cacheHandlers` config (plural) | ✅ | ❌ Help needed | ✅ since 1.11 |
 | `'use cache'` directive | ✅ | ❌ Help needed | ✅ since 1.11 |
@@ -383,6 +385,14 @@ API/concept mapping, config diff, and a seeding replacement:
 
 ## Compatibility
 
+> **Upgrading to Next.js 16.3?** Two behavioral notes: (1) 16.3 changed the
+> internal fetch-cache key format (`v3` → `v4`), so 16.2-era fetch entries
+> become unreadable orphans — deploy with a new `DEPLOYMENT_VERSION` and let
+> the old namespace age out via TTL. (2) An ISR entry found past its
+> `cacheLife` **expire** now triggers a blocking revalidation instead of
+> serving stale (matching `'use cache'` semantics); within
+> `revalidate..expire` stale-while-revalidate is unchanged.
+
 - **Next.js**: `>=15.0.0 <17`
   - `cacheHandler` (singular, ISR): Next **15 and 16** — the handler accepts
     both ctx shapes (Next 15's `ctx.revalidate` / `kindHint`, Next 16's
@@ -413,9 +423,16 @@ ESM and CJS dual-published, full TypeScript types, validated via
   permanent connect-failure latch), request-scoped GET deduplication,
   gzip/brotli compression, Redis Sentinel, built-in OpenTelemetry emitter
   (`/otel`), LRU-bounded memory fallback, ESM peer-loading fixes ✅
-- **v0.4.0** — Build-phase cache seeding (prepopulate prebuilt pages),
-  pub/sub-based tag propagation, Redis Cluster e2e validation, Vercel KV /
-  Upstash adapter, `'use cache: remote'` multi-tier setup
+- **v0.4.0** *(2026-08)* — Build-output cache seeding (`seed` CLI, NX-safe),
+  pub/sub tag propagation, Redis Cluster e2e in CI, `init`/`doctor` CLI,
+  agent assets (skill, rules, MCP server) ✅
+  - *0.4.1* — Buffer serialization fix (~2.8x smaller ISR payloads) ✅
+  - *0.4.2* — upstream-exact tag invalidation semantics: no-durations
+    `updateTags` is hard (`updateTag()` read-your-own-writes), profile
+    durations are soft with a real hard deadline; tag-stale entries are
+    served with `revalidate: -1` instead of a backdated timestamp ✅
+- **v0.5** — Vercel KV / Upstash adapter, `'use cache: remote'` multi-tier
+  setup, `neshClassicCache` equivalent
 
 ---
 
