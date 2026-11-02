@@ -47,6 +47,13 @@ export interface SeedOptions {
   buildNamespace?: string | (() => string);
   compression?: "gzip" | "brotli";
   hashTag?: boolean;
+  /**
+   * When true, App Router routes are written under `meta.routeCache.key`
+   * (e.g. `/route-cache/APP_PAGE/<hash>/$/path`) instead of the bare pathname.
+   * Required for Next.js 16.4+ Full Route Cache lookups to HIT after seeding.
+   * Default: false (pathname keys, for older Next / custom readers).
+   */
+  preferRouteCacheKey?: boolean;
   logger?: Pick<Logger, "warn">;
 }
 
@@ -89,6 +96,7 @@ function readMeta(file: string): {
   headers?: Record<string, string>;
   segmentPaths?: string[];
   postponed?: string;
+  routeCache?: { key?: string };
 } | null {
   try {
     return JSON.parse(fs.readFileSync(file, "utf8")) as ReturnType<typeof readMeta>;
@@ -155,6 +163,9 @@ export async function seedBuildOutput(options: SeedOptions): Promise<SeedSummary
   if (!client.isOpen) await client.connect();
 
   const writeOpts = { keyPrefix, hashTag, ns, ...(options.compression ? { compression: options.compression } : {}) };
+  // Next 16.4+ Full Route Cache looks up meta.routeCache.key
+  // (`/route-cache/APP_PAGE/<hash>/$/path`), not the bare pathname.
+  const preferRouteCacheKey = options.preferRouteCacheKey === true;
 
   try {
     // ── 1) Prerendered routes ────────────────────────────────────────────────
@@ -235,7 +246,12 @@ export async function seedBuildOutput(options: SeedOptions): Promise<SeedSummary
         };
         if (segmentData) value.segmentData = segmentData;
 
-        const r = await writeRecord(client, route, value, info.initialRevalidateSeconds, writeOpts);
+        const routeCacheKey = meta.routeCache?.key;
+        const cacheKey =
+          preferRouteCacheKey && typeof routeCacheKey === "string" && routeCacheKey.length > 0
+            ? routeCacheKey
+            : route;
+        const r = await writeRecord(client, cacheKey, value, info.initialRevalidateSeconds, writeOpts);
         if (r === "written") summary.routes += 1;
         else summary.skippedExisting += 1;
       } catch (err) {
