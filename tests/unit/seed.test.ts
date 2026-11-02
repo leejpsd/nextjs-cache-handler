@@ -207,4 +207,31 @@ describe("seedBuildOutput", () => {
       seedBuildOutput({ client: () => mock(), dir: path.join(dir, "nope") })
     ).rejects.toThrow(/next build/);
   });
+
+  it("preferRouteCacheKey writes under meta.routeCache.key for App Router routes", async () => {
+    const app = path.join(dir, "server", "app");
+    const routeCacheKey = "/route-cache/APP_PAGE/deadbeef/$/";
+    fs.writeFileSync(
+      path.join(app, "index.meta"),
+      JSON.stringify({
+        status: 200,
+        headers: { "x-next-cache-tags": "home" },
+        routeCache: { key: routeCacheKey },
+      })
+    );
+
+    const client = mock();
+    const summary = await seedBuildOutput({
+      client: () => client,
+      dir,
+      buildNamespace: "deploy-1",
+      preferRouteCacheKey: true,
+    });
+
+    expect(summary.routes).toBe(2);
+    expect(client.kv.has(`next-incremental:entry:deploy-1:${routeCacheKey}`)).toBe(true);
+    expect(client.kv.has("next-incremental:entry:deploy-1:/")).toBe(false);
+    // Without routeCache.key on /blog, fall back to the pathname.
+    expect(client.kv.has("next-incremental:entry:deploy-1:/blog")).toBe(true);
+  });
 });

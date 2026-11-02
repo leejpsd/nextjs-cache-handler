@@ -377,6 +377,7 @@ export async function seed(ctx: Ctx): Promise<number> {
   const namespace = flagVal("--namespace");
   const compression = flagVal("--compression") as "gzip" | "brotli" | undefined;
   const hashTag = flags.has("--hash-tag");
+  const preferRouteCacheKey = flags.has("--prefer-route-cache-key");
 
   const ns =
     namespace ??
@@ -390,6 +391,9 @@ export async function seed(ctx: Ctx): Promise<number> {
   // (custom keyPrefix / hashTag) is visible instead of silently seeding
   // keys the app never reads.
   log(`${OK} target keys: ${keyPrefix ?? "next-incremental:"}entry:${hashTag ? `{${ns}}` : ns}:*`);
+  if (preferRouteCacheKey) {
+    log(`${OK} preferRouteCacheKey: seeding App Router under meta.routeCache.key (Next 16.4+)`);
+  }
 
   const seedOpts = {
     dir,
@@ -397,6 +401,7 @@ export async function seed(ctx: Ctx): Promise<number> {
     ...(keyPrefix ? { keyPrefix } : {}),
     ...(compression ? { compression } : {}),
     ...(hashTag ? { hashTag: true } : {}),
+    ...(preferRouteCacheKey ? { preferRouteCacheKey: true } : {}),
   };
   const report = (summary: Awaited<ReturnType<typeof seedBuildOutput>>): number => {
     log(`${OK} seeded: ${summary.routes} app routes, ${summary.pages} pages routes, ${summary.fetch} fetch entries`);
