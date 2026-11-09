@@ -5,11 +5,12 @@
 
 > **`v1.0.0`** — install with
 > `npm install @leejpsd/nextjs-cache-handler`, or wire everything with
-> `npx nextjs-cache-handler init --yes`. Production-validated against
-> AWS ECS Fargate with multi-instance Redis (24h live-traffic soak and a
-> live Redis-reboot drill with zero 5xx — see
-> [`docs/staging-verification-2026-08-01.md`](./docs/staging-verification-2026-08-01.md)),
-> and exercised end-to-end against **Next.js 16.3** (both cache interfaces).
+> `npx nextjs-cache-handler init --yes`. Validated on a staging demo
+> deployment (AWS ECS Fargate, two instances, ElastiCache Redis): a 24h
+> observation run on `0.1.0-rc.1` with 0 errors, and a Redis-reboot drill
+> under ~14 req/s with zero 5xx across 2,550 requests
+> ([`docs/staging-verification-2026-08-01.md`](./docs/staging-verification-2026-08-01.md)).
+> Exercised end-to-end against **Next.js 16.3** (both cache interfaces).
 >
 > v0.4 adds: **build-output cache seeding** (first request after deploy is a
 > HIT), **pub/sub tag propagation** (~3ms cross-instance), **Redis Cluster**
@@ -110,7 +111,7 @@ plural interface as ❌ **"Not yet supported - Help needed"**:
 | Redis Sentinel | ✅ (local failover drill) | ❌ | ❌ |
 | OpenTelemetry | ✅ built-in `/otel` emitter + `onMetric` hook | ❌ | ❌ |
 | Reconnect strategy | ✅ exponential backoff | client-level | error-threshold restart |
-| Live-traffic dogfood (24h+) | ✅ AWS ECS Fargate | not published | not published |
+| Staging dogfood (24h observation) | ✅ AWS ECS Fargate | not published | not published |
 
 PR [#207](https://github.com/fortedigital/nextjs-cache-handler/pull/207) on
 `@fortedigital` (their `cacheHandlers` attempt) was held up in review over
@@ -270,7 +271,7 @@ Full reference: [`docs/api.md`](./docs/api.md).
 
 | Service | How to use | Tested? |
 |---|---|---|
-| **Self-hosted Redis 7+** | `{ type: "redis", url }` or `{ type: "ioredis", url }` | ✅ AWS ElastiCache 24h soak |
+| **Self-hosted Redis 7+** | `{ type: "redis", url }` or `{ type: "ioredis", url }` | ✅ AWS ElastiCache (staging, 24h observation) |
 | **Redis Cluster** | `{ type: "cluster", nodes }` + `hashTag: true` | ✅ e2e-tested against a real 3-master cluster (CI); not yet load-tested at scale |
 | **Upstash Redis** | `{ type: "redis", url: "rediss://..." }` (TLS auto-detected) | not yet validated, expected to work via the standard Redis protocol |
 | **AWS ElastiCache (replication group)** | `{ type: "redis", url: "rediss://..." }` | ✅ reference deployment (re-verified 2026-08-01, Seoul) |
