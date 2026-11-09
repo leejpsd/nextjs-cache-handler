@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.1
+
+### Patch Changes
+
+- [`199d7d8`](https://github.com/leejpsd/nextjs-cache-handler/commit/199d7d853c5a57973d344066b495bd8b00417560) Thanks [@leejpsd](https://github.com/leejpsd)! - Docs: describe the 24h staging run and the Redis-reboot drill as separate checks in the README.
+
 ## 1.0.0
 
 ### Major Changes
