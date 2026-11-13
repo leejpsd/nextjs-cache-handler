@@ -205,6 +205,52 @@ describe("incremental cacheHandler — soft tag SWR for route entries (#1 outer 
     expect(await h.get("/page", { kind: "APP_PAGE" })).toBeNull();
   });
 
+  it("hard revalidateTag is honored by an instance whose clock is behind the writer", async () => {
+    // Two instances sharing one Redis. The hard stamp is written with A's
+    // clock; B reads it while its own clock is still 30 ms behind. A hard
+    // invalidation has no deadline to wait for, so B must miss regardless.
+    const client = new MockRedisClient();
+    client.isOpen = true;
+    const make = () =>
+      createIncrementalCacheHandler({ client: () => client, abortTimeoutMs: 100 });
+    const a = new (make())();
+    const b = new (make())();
+    await a.set(
+      "/page",
+      { kind: "APP_PAGE", body: Buffer.from("html"), headers: { "x-next-cache-tags": "skew" } },
+      { kind: "APP_PAGE", cacheControl: { revalidate: 300 } }
+    );
+
+    vi.setSystemTime(new Date(T0 + 50));
+    await a.revalidateTag("skew"); // no durations → hard ({ expired })
+
+    vi.setSystemTime(new Date(T0 + 20));
+    expect(await b.get("/page", { kind: "APP_PAGE" })).toBeNull();
+  });
+
+  it("revalidateTag(tag, { expire: 0 }) is never served fresh by an instance whose clock is behind", async () => {
+    const client = new MockRedisClient();
+    client.isOpen = true;
+    const make = () =>
+      createIncrementalCacheHandler({ client: () => client, abortTimeoutMs: 100 });
+    const a = new (make())();
+    const b = new (make())();
+    await a.set(
+      "/page",
+      { kind: "APP_PAGE", body: Buffer.from("html"), headers: { "x-next-cache-tags": "skew" } },
+      { kind: "APP_PAGE", cacheControl: { revalidate: 300 } }
+    );
+
+    vi.setSystemTime(new Date(T0 + 50));
+    await a.revalidateTag("skew", { expire: 0 });
+
+    // B has not reached the deadline on its own clock yet: the entry may be
+    // served, but only as stale (backdated past its revalidate window).
+    vi.setSystemTime(new Date(T0 + 20));
+    const out = await b.get("/page", { kind: "APP_PAGE" });
+    if (out !== null) expect(out.lastModified).toBeLessThan(T0 + 20 - 300 * 1000);
+  });
+
   it("revalidateTag(tag, { expire: 1y }) soft-misses until the deadline, then hard-misses (#14)", async () => {
     const { Handler } = setup();
     const h = new Handler();
