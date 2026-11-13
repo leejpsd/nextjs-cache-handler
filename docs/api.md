@@ -40,7 +40,7 @@ ctx contract are accepted (`ctx.cacheControl.revalidate` / `kind` and
 | `client` | `RedisClientFactory \| RedisClientConfig` | **required** | factory function or lazy config object |
 | `keyPrefix` | `string` | `"next-cache:"` / `"next-incremental:"` | multi-app Redis sharing |
 | `buildNamespace` | `string \| () => string` | `DEPLOYMENT_VERSION ?? GIT_HASH ?? NEXT_DEPLOYMENT_ID ?? "unversioned"` | per-deploy key isolation; function form defers env read |
-| `abortTimeoutMs` | `number` | `1500` | per-operation deadline; timeout ⇒ miss (reads) / ignored (writes) / thrown (hard invalidation) |
+| `abortTimeoutMs` | `number` | `1500` | per-operation deadline; timeout ⇒ miss (reads) / ignored (writes) / thrown (hard invalidation, and `revalidateTag` with an `expire`). An invalidation that cannot be written at all (no connection, reconnect cooldown) is thrown the same way |
 | `fallback` | `"auto" \| "always" \| "never"` | `"auto"` | `always` = memory only (never connect); `never` = strict, Redis failures surface as misses |
 | `memoryMaxEntries` | `number` | `1000` | LRU cap for the in-memory fallback (and its tag index) |
 | `compression` | `"gzip" \| "brotli"` | off | transparent Redis value compression (node:zlib). Reads auto-detect, so mixed fleets interoperate; < 1 KiB stored plain |

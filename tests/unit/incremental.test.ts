@@ -552,3 +552,95 @@ describe("incremental cacheHandler — build phase skip", () => {
     expect(setSpy).not.toHaveBeenCalled();
   });
 });
+
+describe("incremental cacheHandler — revalidateTag without a Redis connection (#13)", () => {
+  // A factory that throws stands in for failed auth / cluster discovery:
+  // ConnectionManager.getOrConnect() returns null and then stays null for
+  // the reconnect cooldown.
+  function setupUnreachable(fallback?: "auto" | "never") {
+    const events: { type: string; backend: unknown }[] = [];
+    const Handler = createIncrementalCacheHandler({
+      client: async () => {
+        throw new Error("simulated initialization failure");
+      },
+      abortTimeoutMs: 100,
+      ...(fallback ? { fallback } : {}),
+      logger: { debug() {}, info() {}, warn() {}, error() {} },
+      onMetric: (e) => {
+        if (e.type.startsWith("tag.invalidate")) {
+          events.push({ type: e.type, backend: e.meta?.backend });
+        }
+      },
+    });
+    return { Handler, events };
+  }
+
+  it.each([
+    ["auto", undefined],
+    ["never", "never" as const],
+  ])("hard invalidation rejects instead of reporting success (fallback: %s)", async (_label, fallback) => {
+    const { Handler, events } = setupUnreachable(fallback);
+    const h = new Handler();
+
+    await expect(h.revalidateTag("posts")).rejects.toThrow(/Redis unavailable/);
+    // Second call lands inside the reconnect cooldown: still not a success.
+    await expect(h.revalidateTag("posts")).rejects.toThrow(/Redis unavailable/);
+    expect(events).toEqual([]);
+  });
+
+  it("revalidateTag(tag, { expire }) rejects too, like a failed write does", async () => {
+    const { Handler, events } = setupUnreachable();
+    const h = new Handler();
+
+    await expect(h.revalidateTag("posts", { expire: 0 })).rejects.toThrow(/Redis unavailable/);
+    await expect(h.revalidateTag("posts", { expire: 31536000 })).rejects.toThrow(/Redis unavailable/);
+    expect(events).toEqual([]);
+  });
+
+  it("the invalidation still applies locally before the rejection", async () => {
+    // The process that called revalidateTag must not keep serving the entry
+    // from its own memory just because the remote write could not be made.
+    const { Handler } = setupUnreachable();
+    const h = new Handler();
+    await h.set(
+      "/page",
+      { kind: "APP_PAGE", body: Buffer.from("html"), headers: { "x-next-cache-tags": "posts" } },
+      { kind: "APP_PAGE", cacheControl: { revalidate: 300 } }
+    );
+    expect(await h.get("/page", { kind: "APP_PAGE" })).not.toBeNull();
+
+    vi.setSystemTime(new Date(T0 + 10));
+    await expect(h.revalidateTag("posts")).rejects.toThrow(/Redis unavailable/);
+
+    h.resetRequestCache();
+    expect(await h.get("/page", { kind: "APP_PAGE" })).toBeNull();
+  });
+
+  it("durations without an expire stay best-effort but never report a Redis write", async () => {
+    const { Handler, events } = setupUnreachable();
+    const h = new Handler();
+
+    await expect(h.revalidateTag("posts", {})).resolves.toBeUndefined();
+    expect(events).toEqual([]);
+  });
+
+  it("memory-only modes are unaffected: no connection is attempted and nothing rejects", async () => {
+    const events: string[] = [];
+    const factory = vi.fn(async () => {
+      throw new Error("must not be called");
+    });
+    const Handler = createIncrementalCacheHandler({
+      client: factory,
+      abortTimeoutMs: 100,
+      fallback: "always",
+      onMetric: (e) => {
+        if (e.type.startsWith("tag.invalidate")) events.push(`${e.type}:${String(e.meta?.backend)}`);
+      },
+    });
+    const h = new Handler();
+
+    await expect(h.revalidateTag("posts")).resolves.toBeUndefined();
+    expect(factory).not.toHaveBeenCalled();
+    expect(events).toEqual(["tag.invalidate.hard:memory"]);
+  });
+});

@@ -545,7 +545,15 @@ export class IncrementalRedisCacheHandler {
         this.state.opts.abortTimeoutMs,
         async () => {
           const client = await this.state.conn.getOrConnect();
-          if (!client) return;
+          if (!client) {
+            // No connection (failed init, or inside the reconnect cooldown):
+            // nothing was written, so other instances still hold the entry.
+            // Treat it like a failed write instead of falling through to the
+            // success metric below.
+            throw new Error(
+              "[next-cache] revalidateTag: Redis unavailable, tag state was not written"
+            );
+          }
           await Promise.all(
             list.map((t) =>
               client.set(tagMetaKey(this.state, t), JSON.stringify(payload), {
@@ -563,7 +571,9 @@ export class IncrementalRedisCacheHandler {
       this.state.logger.warn("revalidateTag() failed", {
         message: (err as Error).message,
       });
-      // Hard expirations should propagate so callers know to retry.
+      // An invalidation with a deadline (no durations, or durations with an
+      // `expire`) must propagate so the caller knows it was not confirmed and
+      // can retry. The local stamp above already took effect in this process.
       if (payload.expired !== undefined) throw err;
     }
   }
