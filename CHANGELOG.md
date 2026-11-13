@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.2
+
+### Patch Changes
+
+- [#17](https://github.com/leejpsd/nextjs-cache-handler/pull/17) [`44a0889`](https://github.com/leejpsd/nextjs-cache-handler/commit/44a08896d2b364f8da101e8ed0e52d014126bbd9) Thanks [@jeroendegloire](https://github.com/jeroendegloire)! - Fix incremental `isTagStateExpired` so a future `expired` from `revalidateTag(tag, 'max')` no longer hard-misses every tagged entry for a year (#14). Hard invalidations (`updateTag`, single-argument `revalidateTag`) still apply the moment they are read, even on an instance whose clock is behind the one that wrote them.
+
+- [#21](https://github.com/leejpsd/nextjs-cache-handler/pull/21) [`3a57a0b`](https://github.com/leejpsd/nextjs-cache-handler/commit/3a57a0bad264e68c70387dbfa241155d4124b4f7) Thanks [@leejpsd](https://github.com/leejpsd)! - Fix seeding of the root route on Next.js versions before 16.3.8. Those versions store and look up prerendered routes under Next's normalized page path, where `/` is `/index`, but the seed wrote the root route under `/`, so it was never read and the first request to the home page after a deploy was a `MISS`. Routes whose path starts with `/index` were also read from the wrong build files. The seed now uses the same normalization as Next for both the artifact path and the key.
+
+- [#21](https://github.com/leejpsd/nextjs-cache-handler/pull/21) [`3a57a0b`](https://github.com/leejpsd/nextjs-cache-handler/commit/3a57a0bad264e68c70387dbfa241155d4124b4f7) Thanks [@leejpsd](https://github.com/leejpsd)! - `seedBuildOutput` and the `seed` CLI now write prerendered App Router and Pages Router routes under the route-scoped key that Next.js 16.3.8+ records in each build artifact (`routeCache.key` in `.meta`). From 16.3.8 the runtime never asks a custom cache handler for a bare pathname, so pathname-keyed seeds were written but never read and the first request after a deploy was still a `MISS` (#16). Builds from older Next.js versions carry no such metadata and are seeded under the page path as before; no option or flag is needed.
+
 ## 1.0.1
 
 ### Patch Changes
