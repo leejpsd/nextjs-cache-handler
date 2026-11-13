@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.6
+
+### Patch Changes
+
+- [#29](https://github.com/leejpsd/nextjs-cache-handler/pull/29) [`8da3aba`](https://github.com/leejpsd/nextjs-cache-handler/commit/8da3aba399582738fbd195b98df7c593da06aeb6) Thanks [@leejpsd](https://github.com/leejpsd)! - Docs: remove Vercel KV from the compatibility table and the roadmap. Vercel KV is no longer offered, and existing stores were moved to Upstash Redis in December 2024, so the Upstash row now covers them. No code changes.
+
 ## 1.0.5
 
 ### Patch Changes

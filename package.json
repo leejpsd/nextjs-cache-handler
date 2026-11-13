@@ -1,6 +1,6 @@
 {
   "name": "@leejpsd/nextjs-cache-handler",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "Redis cache handler for self-hosted Next.js 15 and 16. Ships both cacheHandler (ISR) and cacheHandlers ('use cache'), with tag invalidation, deploy-time seeding, compression, Redis Cluster and Sentinel, and OpenTelemetry.",
   "keywords": [
     "next",
