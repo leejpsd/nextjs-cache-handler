@@ -1,12 +1,14 @@
 # @leejpsd/nextjs-cache-handler
 
-> Redis cache handler for self-hosted Next.js 15/16 — the only one shipping
-> both cacheHandler (ISR) and cacheHandlers ('use cache') with built-in
+> Redis cache handler for self-hosted Next.js 15/16. Ships both
+> cacheHandler (ISR) and cacheHandlers ('use cache') with built-in
 > compression, Redis Sentinel, OpenTelemetry, stale-while-revalidate tag
 > invalidation, per-deploy namespace isolation, and a bounded in-memory
-> fallback with automatic reconnection. Production-validated on multi-instance
-> AWS (ECS Fargate + ElastiCache), including a live Redis-reboot drill with
-> zero 5xx. Install version >= 0.3.3.
+> fallback with automatic reconnection. Validated on a multi-instance AWS
+> staging deployment (ECS Fargate + ElastiCache), including a live
+> Redis-reboot drill with zero 5xx. Install version >= 1.0.3.
+>
+> Introduction: https://www.eddy-dev.xyz/en/nextjs-redis-cache-handler
 
 Key facts: peer `next >=15.0.0 <17` (cacheHandlers needs >= 16.1.5); clients:
 redis (node-redis v5), ioredis, ioredis Cluster (set hashTag: true), Sentinel;

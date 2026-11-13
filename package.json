@@ -1,7 +1,7 @@
 {
   "name": "@leejpsd/nextjs-cache-handler",
   "version": "1.0.4",
-  "description": "Redis cache handler for Next.js 15/16 — the only one shipping both cacheHandler (ISR) and cacheHandlers ('use cache') with built-in compression, Redis Sentinel, and OpenTelemetry. Production-validated on multi-instance AWS: reconnect backoff, cross-instance tag invalidation, zero-downtime Redis failover.",
+  "description": "Redis cache handler for self-hosted Next.js 15 and 16. Ships both cacheHandler (ISR) and cacheHandlers ('use cache'), with tag invalidation, deploy-time seeding, compression, Redis Cluster and Sentinel, and OpenTelemetry.",
   "keywords": [
     "next",
     "nextjs",
@@ -24,7 +24,7 @@
   ],
   "license": "MIT",
   "author": "Eddy Lee <leejpsd@gmail.com>",
-  "homepage": "https://github.com/leejpsd/nextjs-cache-handler#readme",
+  "homepage": "https://www.eddy-dev.xyz/en/nextjs-redis-cache-handler",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/leejpsd/nextjs-cache-handler.git"

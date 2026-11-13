@@ -24,7 +24,7 @@ deployment isolation guarantee but otherwise is sideways.
 | `cacheHandler` (singular ISR) | ✅ | ✅ |
 | `cacheHandlers` (plural `'use cache'`) | ❌ Help needed | ✅ |
 | `'use cache: remote'` | ❌ Help needed | ✅ |
-| `cacheComponents: true` | ❌ Help needed | ✅ Production-validated |
+| `cacheComponents: true` | ❌ Help needed | ✅ |
 | Build-phase skip | ✅ | ✅ |
 | Auto deploy isolation | manual | ✅ default-on |
 | Lua-atomic SET+tag | partial (MULTI) | ✅ |

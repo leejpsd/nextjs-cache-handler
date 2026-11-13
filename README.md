@@ -3,6 +3,8 @@
 [![npm](https://img.shields.io/npm/v/@leejpsd/nextjs-cache-handler.svg)](https://www.npmjs.com/package/@leejpsd/nextjs-cache-handler)
 [![license](https://img.shields.io/npm/l/@leejpsd/nextjs-cache-handler.svg)](./LICENSE)
 
+**New here?** Read the introduction: [Redis cache handler for self-hosted Next.js 15 and 16](https://www.eddy-dev.xyz/en/nextjs-redis-cache-handler) — the problem it solves, setup for each Next.js version, and what it has been tested on.
+
 > **`v1.0`** — install with
 > `npm install @leejpsd/nextjs-cache-handler`, or wire everything with
 > `npx nextjs-cache-handler init --yes`. Validated on a staging demo
