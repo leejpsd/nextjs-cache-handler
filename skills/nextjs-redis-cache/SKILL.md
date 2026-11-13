@@ -85,13 +85,22 @@ the builder.
 
 | Call | Effect | Mechanism |
 |---|---|---|
-| `revalidateTag(tag)` / `revalidateTag(tag, "max")` | **SOFT / SWR**: keep serving stale instantly, re-render in background, all instances converge (~1-2s) | marker write; read path backdates entries |
-| `updateTag(tag)` (server action) / hard expire | **HARD**: entries deleted now, next read blocks and regenerates | Lua atomic delete |
+| `revalidateTag(tag, "max")` | **SOFT / SWR**: keep serving stale instantly, re-render in background, all instances converge (~1-2s) | marker write; read path backdates entries |
+| `updateTag(tag)` (server action) / single-argument `revalidateTag(tag)` (deprecated in Next 16) / hard expire | **HARD**: entries deleted now, next read blocks and regenerates | Lua atomic delete |
 | `revalidatePath(path)` | implicit route tags (`_N_T_/...`) flow through the soft path; Next additionally hard-discards via `getExpiration` | |
 
 Facts that prevent misdiagnosis:
 - Soft invalidation is NOT lost: it serves STALE content briefly by design.
   If content "never updates", check version >= 0.3.3 first.
+- If pages on `cacheHandler` (ISR) stay `MISS` on every request after a
+  `revalidateTag(tag, "max")`, upgrade to >= 1.0.2 (earlier versions read
+  the one-year soft deadline as already expired).
+- Invalidation that cannot reach Redis: `cacheHandler` (ISR) rejects it
+  (>= 1.0.3); `cacheHandlers` rejects hard invalidation and treats soft as
+  best-effort. Next only awaits `updateTag()` in a Server Action, so only
+  that request fails (500). `revalidateTag(tag, "max")` runs after the
+  response, so a rejection shows up in the server log, not in the HTTP
+  status (measured on Next 16.4.6 with `cacheHandler`).
 - The instance that fires `revalidateTag` refreshes eagerly
   (read-your-own-writes). Other instances converge on their next request.
 - Explicit `cacheTag()` tags are checked by the HANDLER, not by Next —
@@ -122,7 +131,8 @@ ElastiCache reboot drill: 2550 requests, zero 5xx).
   are HITs instead of a regeneration stampede:
   `REDIS_URL=... DEPLOYMENT_VERSION=<deploy-id> npx nextjs-cache-handler seed`
   (run after `next build`, e.g. a Docker entrypoint step; NX semantics —
-  never overwrites live entries).
+  never overwrites live entries). On Next >= 16.3.8 this needs package
+  version >= 1.0.2; older versions seed keys that Next no longer reads.
 - **`npx nextjs-cache-handler init --yes`** wires everything above
   automatically; **`npx nextjs-cache-handler doctor`** is the first command
   to run when debugging connectivity or key-layout issues.
