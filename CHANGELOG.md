@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.5
+
+### Patch Changes
+
+- [#27](https://github.com/leejpsd/nextjs-cache-handler/pull/27) [`53e3bd1`](https://github.com/leejpsd/nextjs-cache-handler/commit/53e3bd15b42d6513f4cadedbeb10add348dd92a6) Thanks [@leejpsd](https://github.com/leejpsd)! - Docs: link the introduction article from the README and the npm homepage, and reword the package description and `llms.txt` to describe what the package ships instead of comparing it to others. No code changes.
+
 ## 1.0.4
 
 ### Patch Changes
