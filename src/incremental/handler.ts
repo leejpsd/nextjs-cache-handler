@@ -198,14 +198,16 @@ function isTagStateExpired(
   isFetch: boolean
 ): boolean {
   if (!state || typeof lastModified !== "number") return false;
-  // Match Next's areTagsExpired: a future `expired` (e.g. revalidateTag(tag, 'max'))
-  // must not hard-miss until the deadline has actually passed.
-  if (
-    typeof state.expired === "number" &&
-    state.expired <= Date.now() &&
-    state.expired >= lastModified
-  ) {
-    return true;
+  if (typeof state.expired === "number" && state.expired >= lastModified) {
+    // Hard invalidation (no `stale` stamp: updateTag / single-argument
+    // revalidateTag) has no deadline to wait for. It applies as soon as it
+    // is read, so an instance whose clock runs behind the writer's cannot
+    // keep serving the invalidated entry as fresh.
+    if (typeof state.stale !== "number") return true;
+    // Soft invalidation carries its deadline in `expired` (a year ahead for
+    // revalidateTag(tag, 'max')). Match Next's areTagsExpired: it only
+    // becomes a hard miss once that deadline has actually passed.
+    if (state.expired <= Date.now()) return true;
   }
   if (isFetch && typeof state.stale === "number" && state.stale >= lastModified) return true;
   return false;
