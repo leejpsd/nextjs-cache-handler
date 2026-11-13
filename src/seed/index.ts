@@ -19,6 +19,13 @@
  *     PPR `.segments/`) → APP_PAGE records
  *   - Pages Router routes (`.next/server/pages/<route>.{html,json}`) → PAGES
  *   - fetch cache (`.next/cache/fetch-cache/<hash>`) → FETCH records
+ *
+ * Route keys: Next.js 16.3.8+ scopes response-cache keys by source route
+ * (`/route-cache/<KIND>/<hash>/$/<path>`) and never asks a custom handler
+ * for a bare pathname. The build records the exact key in each artifact's
+ * `.meta` (`routeCache.key`), so routes are seeded under that key when it is
+ * present. Builds from older Next versions carry no such key and are looked
+ * up by normalized page path (`/` is `/index`), which is what gets used then.
  */
 
 import fs from "node:fs";
@@ -80,8 +87,16 @@ function clampTtl(revalidate: number | false | undefined): number {
   return MIN_TTL_SEC;
 }
 
+/**
+ * Mirrors Next's `normalizePagePath` for a concrete prerendered route:
+ * `/` → `/index`, `/index/sub` → `/index/index/sub`. This is where the build
+ * stores the route's artifacts and, before Next.js 16.3.8, the key Next's
+ * IncrementalCache derives for it.
+ */
 function routeToFileBase(route: string): string {
-  return route === "/" ? "/index" : route;
+  if (route === "/") return "/index";
+  if (/^\/index(\/|$)/.test(route)) return `/index${route}`;
+  return route;
 }
 
 function readMeta(file: string): {
@@ -89,12 +104,24 @@ function readMeta(file: string): {
   headers?: Record<string, string>;
   segmentPaths?: string[];
   postponed?: string;
+  routeCache?: { key?: unknown };
 } | null {
   try {
     return JSON.parse(fs.readFileSync(file, "utf8")) as ReturnType<typeof readMeta>;
   } catch {
     return null;
   }
+}
+
+/**
+ * The key the runtime will look this route up by. Next.js 16.3.8+ writes it
+ * into the build artifact's `.meta`; without it (older Next, or a missing or
+ * malformed `.meta`) the lookup key is the normalized page path, i.e. the
+ * same `base` the artifact files are stored under.
+ */
+function resolveRouteKey(base: string, meta: ReturnType<typeof readMeta>): string {
+  const key = meta?.routeCache?.key;
+  return typeof key === "string" && key.length > 0 ? key : base;
 }
 
 async function writeRecord(
@@ -166,6 +193,7 @@ export async function seedBuildOutput(options: SeedOptions): Promise<SeedSummary
         if (isPages) {
           const html = path.join(dir, "server", "pages", `${base.slice(1)}.html`);
           const data = path.join(dir, "server", "pages", `${base.slice(1)}.json`);
+          const pagesMeta = path.join(dir, "server", "pages", `${base.slice(1)}.meta`);
           if (!fs.existsSync(html)) {
             summary.skippedIncomplete += 1;
             continue;
@@ -179,7 +207,8 @@ export async function seedBuildOutput(options: SeedOptions): Promise<SeedSummary
             headers: undefined,
             status: undefined,
           };
-          const r = await writeRecord(client, route, value, info.initialRevalidateSeconds, writeOpts);
+          const key = resolveRouteKey(base, readMeta(pagesMeta));
+          const r = await writeRecord(client, key, value, info.initialRevalidateSeconds, writeOpts);
           if (r === "written") summary.pages += 1;
           else summary.skippedExisting += 1;
           continue;
@@ -235,7 +264,8 @@ export async function seedBuildOutput(options: SeedOptions): Promise<SeedSummary
         };
         if (segmentData) value.segmentData = segmentData;
 
-        const r = await writeRecord(client, route, value, info.initialRevalidateSeconds, writeOpts);
+        const key = resolveRouteKey(base, meta);
+        const r = await writeRecord(client, key, value, info.initialRevalidateSeconds, writeOpts);
         if (r === "written") summary.routes += 1;
         else summary.skippedExisting += 1;
       } catch (err) {

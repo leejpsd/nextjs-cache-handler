@@ -108,7 +108,7 @@ describe("seedBuildOutput", () => {
       skippedIncomplete: 1, // "/broken"
       errors: [],
     });
-    expect(client.kv.has("next-incremental:entry:deploy-1:/")).toBe(true);
+    expect(client.kv.has("next-incremental:entry:deploy-1:/index")).toBe(true);
     expect(client.kv.has("next-incremental:entry:deploy-1:/blog")).toBe(true);
     expect(client.kv.has("next-incremental:entry:deploy-1:/legacy")).toBe(true);
     expect(client.kv.has("next-incremental:entry:deploy-1:abc123")).toBe(true);
@@ -124,7 +124,8 @@ describe("seedBuildOutput", () => {
       buildNamespace: "deploy-1",
     });
     const h = new Handler();
-    const out = await h.get("/", { kind: "APP_PAGE" });
+    // Next < 16.3.8 asks for the normalized page path: "/" is "/index".
+    const out = await h.get("/index", { kind: "APP_PAGE" });
     expect(out).not.toBeNull();
     const value = out!.value as { kind: string; html: string; status: number };
     expect(value.kind).toBe("APP_PAGE");
@@ -150,9 +151,9 @@ describe("seedBuildOutput", () => {
 
   it("NX: never overwrites an existing (newer) live entry", async () => {
     const client = mock();
-    client.kv.set("next-incremental:entry:d:/", "live-entry");
+    client.kv.set("next-incremental:entry:d:/index", "live-entry");
     const summary = await seedBuildOutput({ client: () => client, dir, buildNamespace: "d" });
-    expect(client.kv.get("next-incremental:entry:d:/")).toBe("live-entry");
+    expect(client.kv.get("next-incremental:entry:d:/index")).toBe("live-entry");
     expect(summary.skippedExisting).toBe(1);
     expect(summary.routes).toBe(1); // "/blog" still seeded
   });
@@ -206,5 +207,155 @@ describe("seedBuildOutput", () => {
     await expect(
       seedBuildOutput({ client: () => mock(), dir: path.join(dir, "nope") })
     ).rejects.toThrow(/next build/);
+  });
+});
+
+describe("seedBuildOutput — route-scoped keys (Next.js 16.3.8+, #16)", () => {
+  // Key shapes as emitted by `next build` on 16.4.6.
+  const APP_KEY =
+    "/route-cache/APP_PAGE/c6377dd9ce6a1c2cd100eb4344e843eb4639b9ed26f84643f77680e9eb454c4b/$/index";
+  const PAGES_KEY =
+    "/route-cache/PAGES/15486b37abb374f051d18b6144500dc7d20cbed764c27b2cea8a3bd79ab9af48/$/legacy";
+
+  function writeAppMeta(routeCache: unknown) {
+    fs.writeFileSync(
+      path.join(dir, "server", "app", "index.meta"),
+      JSON.stringify({ status: 200, headers: { "x-next-cache-tags": "home" }, routeCache })
+    );
+  }
+
+  it("seeds an App Router route under meta.routeCache.key, not the pathname", async () => {
+    writeAppMeta({
+      key: APP_KEY,
+      owner: { kind: "APP_PAGE", sourceRoute: "/page" },
+      isFallback: false,
+    });
+
+    const client = mock();
+    const summary = await seedBuildOutput({ client: () => client, dir, buildNamespace: "deploy-1" });
+
+    expect(summary).toMatchObject({ routes: 2, pages: 1, errors: [] });
+    expect(client.kv.has(`next-incremental:entry:deploy-1:${APP_KEY}`)).toBe(true);
+    expect(client.kv.has("next-incremental:entry:deploy-1:/index")).toBe(false);
+    // "/blog" has no routeCache metadata → still seeded by page path.
+    expect(client.kv.has("next-incremental:entry:deploy-1:/blog")).toBe(true);
+  });
+
+  it("seeds a Pages Router route under the key in its .meta", async () => {
+    fs.writeFileSync(
+      path.join(dir, "server", "pages", "legacy.meta"),
+      JSON.stringify({
+        routeCache: {
+          key: PAGES_KEY,
+          owner: { kind: "PAGES", sourceRoute: "/legacy" },
+          isFallback: false,
+        },
+      })
+    );
+
+    const client = mock();
+    const summary = await seedBuildOutput({ client: () => client, dir, buildNamespace: "deploy-1" });
+
+    expect(summary).toMatchObject({ routes: 2, pages: 1, errors: [] });
+    expect(client.kv.has(`next-incremental:entry:deploy-1:${PAGES_KEY}`)).toBe(true);
+    expect(client.kv.has("next-incremental:entry:deploy-1:/legacy")).toBe(false);
+  });
+
+  it("the handler serves the seeded entry when asked for the scoped key", async () => {
+    writeAppMeta({ key: APP_KEY });
+
+    const client = mock();
+    await seedBuildOutput({ client: () => client, dir, buildNamespace: "deploy-1" });
+
+    const Handler = createIncrementalCacheHandler({
+      client: () => client,
+      abortTimeoutMs: 100,
+      buildNamespace: "deploy-1",
+    });
+    const h = new Handler();
+    const out = await h.get(APP_KEY, { kind: "APP_PAGE" });
+    expect(out).not.toBeNull();
+    const value = out!.value as { kind: string; html: string };
+    expect(value.html).toContain("home");
+    // The page path is not a key the 16.3.8+ runtime ever asks for.
+    h.resetRequestCache();
+    expect(await h.get("/index", { kind: "APP_PAGE" })).toBeNull();
+  });
+
+  it.each([
+    ["an empty key", { key: "" }],
+    ["a non-string key", { key: 42 }],
+    ["no key", {}],
+    ["a null routeCache", null],
+  ])("falls back to the page path for %s", async (_label, routeCache) => {
+    writeAppMeta(routeCache);
+
+    const client = mock();
+    const summary = await seedBuildOutput({ client: () => client, dir, buildNamespace: "deploy-1" });
+
+    expect(summary.errors).toEqual([]);
+    expect(client.kv.has("next-incremental:entry:deploy-1:/index")).toBe(true);
+  });
+
+  it("an unreadable Pages .meta falls back to the page path", async () => {
+    fs.writeFileSync(path.join(dir, "server", "pages", "legacy.meta"), "{not json");
+
+    const client = mock();
+    const summary = await seedBuildOutput({ client: () => client, dir, buildNamespace: "deploy-1" });
+
+    expect(summary).toMatchObject({ pages: 1, errors: [] });
+    expect(client.kv.has("next-incremental:entry:deploy-1:/legacy")).toBe(true);
+  });
+});
+
+describe("seedBuildOutput — page path normalization (Next.js < 16.3.8)", () => {
+  // Next stores and looks up prerendered routes under normalizePagePath():
+  // "/" → "/index", "/index" → "/index/index", "/index/sub" → "/index/index/sub".
+  function addIndexNamedRoutes() {
+    const app = path.join(dir, "server", "app");
+    const manifestPath = path.join(dir, "prerender-manifest.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as {
+      routes: Record<string, unknown>;
+    };
+    manifest.routes["/index"] = { initialRevalidateSeconds: 60, dataRoute: "/index.rsc" };
+    manifest.routes["/index/sub"] = { initialRevalidateSeconds: 60, dataRoute: "/index/sub.rsc" };
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+
+    fs.mkdirSync(path.join(app, "index", "index"), { recursive: true });
+    fs.writeFileSync(path.join(app, "index", "index.html"), "<html>index-named</html>");
+    fs.writeFileSync(path.join(app, "index", "index.meta"), JSON.stringify({ status: 200 }));
+    fs.writeFileSync(path.join(app, "index", "index", "sub.html"), "<html>index-sub</html>");
+    fs.writeFileSync(path.join(app, "index", "index", "sub.meta"), JSON.stringify({ status: 200 }));
+  }
+
+  async function seededHtml(client: MockRedisClient, key: string): Promise<string | null> {
+    const Handler = createIncrementalCacheHandler({
+      client: () => client,
+      abortTimeoutMs: 100,
+      buildNamespace: "deploy-1",
+    });
+    const out = await new Handler().get(key, { kind: "APP_PAGE" });
+    return out ? (out.value as { kind: string; html: string }).html : null;
+  }
+
+  it("seeds the root route under /index, the key the runtime asks for", async () => {
+    const client = mock();
+    await seedBuildOutput({ client: () => client, dir, buildNamespace: "deploy-1" });
+
+    expect(client.kv.has("next-incremental:entry:deploy-1:/index")).toBe(true);
+    expect(client.kv.has("next-incremental:entry:deploy-1:/")).toBe(false);
+    expect(await seededHtml(client, "/index")).toContain("home");
+  });
+
+  it("an /index-prefixed route reads its own files and gets its own key", async () => {
+    addIndexNamedRoutes();
+
+    const client = mock();
+    const summary = await seedBuildOutput({ client: () => client, dir, buildNamespace: "deploy-1" });
+
+    expect(summary).toMatchObject({ routes: 4, skippedExisting: 0, errors: [] });
+    expect(await seededHtml(client, "/index")).toContain("home");
+    expect(await seededHtml(client, "/index/index")).toContain("index-named");
+    expect(await seededHtml(client, "/index/index/sub")).toContain("index-sub");
   });
 });
