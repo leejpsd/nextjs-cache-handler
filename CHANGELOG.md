@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.3
+
+### Patch Changes
+
+- [#23](https://github.com/leejpsd/nextjs-cache-handler/pull/23) [`e3a1d9a`](https://github.com/leejpsd/nextjs-cache-handler/commit/e3a1d9aa9eb16a20e14e1eaf54dcf05f3f689087) Thanks [@leejpsd](https://github.com/leejpsd)! - `cacheHandler` (singular): `revalidateTag` no longer resolves when the tag state could not be written because there is no Redis connection (failed initialization or the reconnect cooldown). It previously returned normally and emitted a `tag.invalidate.*` metric with `backend: "redis"`, so a caller could not tell an unwritten invalidation from a confirmed one while other instances kept serving the old entry (#13). It now rejects, exactly as it already did when the write itself failed or timed out, and no success metric is emitted. The invalidation is still applied in the calling process first. Memory-only modes (`fallback: "always"`, build phase, `instance-local:` tags) are unchanged.
+
 ## 1.0.2
 
 ### Patch Changes
