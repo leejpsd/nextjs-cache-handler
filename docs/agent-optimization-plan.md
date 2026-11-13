@@ -96,7 +96,7 @@ stdio MCP. 코어 zero-dep 유지를 위해 분리(MCP SDK 의존).
 | 1 | 빌드 시 캐시 시딩 (registerInitialCache 대응) | 유일한 실질 기능 열세. 배포 직후 재생성 러시 제거 |
 | 2 | pub/sub 태그 전파 (SCAN 폴링 → 푸시) | 전파 2.1s → 수십 ms, trieb.work 아키텍처 격차 해소 |
 | 3 | Redis Cluster e2e (로컬 멀티노드) | "unit-tested only" 꼬리표 제거 |
-| 4 | Vercel KV/Upstash 어댑터 + 'use cache: remote' 멀티티어 | 로드맵 약속분 |
+| 4 | Upstash 검증 + 'use cache: remote' 멀티티어 | 로드맵 약속분 |
 | 5 | 위생: 데모 리포 커밋(soft 프로브·Dockerfile·terraform env), IAM 사용자, 구 AWS 계정 폐쇄(사용자) | |
 
 ## 추천 실행 순서
