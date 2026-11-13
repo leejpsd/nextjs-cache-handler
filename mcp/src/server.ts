@@ -243,7 +243,7 @@ server.tool(
       tag,
       isr: { key: isrKey, state: isrRaw ? (JSON.parse(isrRaw) as unknown) : null },
       useCache: plural,
-      hint: "ISR: 'expired' hits all kinds, 'stale' is SWR. 'use cache': entries older than invalidatedAt serve stale-while-revalidate.",
+      hint: "ISR: 'expired' without 'stale' is a hard invalidation (all kinds miss). With 'stale', 'expired' is the soft deadline (e.g. a year ahead for revalidateTag(tag, 'max')) and only becomes a hard miss once it has passed; until then 'stale' means SWR for routes and a miss for fetch entries. 'use cache': entries older than invalidatedAt serve stale-while-revalidate.",
     });
   }
 );

@@ -3,7 +3,7 @@
 [![npm](https://img.shields.io/npm/v/@leejpsd/nextjs-cache-handler.svg)](https://www.npmjs.com/package/@leejpsd/nextjs-cache-handler)
 [![license](https://img.shields.io/npm/l/@leejpsd/nextjs-cache-handler.svg)](./LICENSE)
 
-> **`v1.0.0`** — install with
+> **`v1.0`** — install with
 > `npm install @leejpsd/nextjs-cache-handler`, or wire everything with
 > `npx nextjs-cache-handler init --yes`. Validated on a staging demo
 > deployment (AWS ECS Fargate, two instances, ElastiCache Redis): a 24h
@@ -11,6 +11,9 @@
 > under ~14 req/s with zero 5xx across 2,550 requests
 > ([`docs/staging-verification-2026-08-01.md`](./docs/staging-verification-2026-08-01.md)).
 > Exercised end-to-end against **Next.js 16.3** (both cache interfaces).
+> The 1.0.2 fixes (seeding, tag invalidation) were additionally run by hand
+> against Next.js 16.2.4, 16.3.8 and 16.4.6 with a real Redis, and the 1.0.3
+> fix (Redis outage) against 16.4.6; `cacheHandler` only.
 >
 > v0.4 adds: **build-output cache seeding** (first request after deploy is a
 > HIT), **pub/sub tag propagation** (~3ms cross-instance), **Redis Cluster**
@@ -394,6 +397,13 @@ API/concept mapping, config diff, and a seeding replacement:
 > `cacheLife` **expire** now triggers a blocking revalidation instead of
 > serving stale (matching `'use cache'` semantics); within
 > `revalidate..expire` stale-while-revalidate is unchanged.
+>
+> **On Next.js 16.3.8 or later?** Route entries are keyed by source route
+> (`/route-cache/<KIND>/<hash>/$/<path>`) instead of the pathname. The
+> handlers store whatever key Next passes, so nothing changes at runtime,
+> but `seed` needs **1.0.2 or later**: earlier versions wrote pathname keys
+> that 16.3.8+ never reads, so the first request after a deploy was a
+> `MISS`.
 
 - **Next.js**: `>=15.0.0 <17`
   - `cacheHandler` (singular, ISR): Next **15 and 16** — the handler accepts
@@ -435,6 +445,13 @@ ESM and CJS dual-published, full TypeScript types, validated via
     served with `revalidate: -1` instead of a backdated timestamp ✅
 - **v1.0.0** *(2026-08)* — public API frozen under semver; every export
   documented in [`docs/api.md`](./docs/api.md) ✅
+  - *1.0.2* — `cacheHandler`: `revalidateTag(tag, 'max')` no longer turns
+    every tagged entry into a miss for a year; hard invalidation is immune
+    to clock skew between instances. `seed`: route-scoped keys for Next
+    16.3.8+ (App and Pages Router), and the root route on older versions ✅
+  - *1.0.3* — `cacheHandler`: `revalidateTag` rejects when the tag state
+    could not be written (no Redis connection) instead of reporting
+    success ✅
 - **Next** — Vercel KV / Upstash adapters, `'use cache: remote'` multi-tier
   setup, `neshClassicCache` equivalent. All additive; no 2.0 needed.
 
