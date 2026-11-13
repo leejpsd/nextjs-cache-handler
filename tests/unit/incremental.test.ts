@@ -204,6 +204,50 @@ describe("incremental cacheHandler — soft tag SWR for route entries (#1 outer 
     h.resetRequestCache();
     expect(await h.get("/page", { kind: "APP_PAGE" })).toBeNull();
   });
+
+  it("revalidateTag(tag, { expire: 1y }) soft-misses until the deadline, then hard-misses (#14)", async () => {
+    const { Handler } = setup();
+    const h = new Handler();
+    await h.set(
+      "/page",
+      {
+        kind: "APP_PAGE",
+        body: Buffer.from("html"),
+        headers: { "x-next-cache-tags": "menu" },
+      },
+      { kind: "APP_PAGE", cacheControl: { revalidate: 300 } }
+    );
+
+    vi.setSystemTime(new Date(T0 + 10));
+    await h.revalidateTag("menu", { expire: 31536000 }); // Next's 'max'
+
+    h.resetRequestCache();
+    const soft = await h.get("/page", { kind: "APP_PAGE" });
+    // Soft: serve with backdated lastModified, not a blocking miss.
+    expect(soft).not.toBeNull();
+    expect(soft!.lastModified).toBe(T0 + 10 - 301 * 1000);
+
+    // Regeneration after the soft invalidation must HIT again.
+    vi.setSystemTime(new Date(T0 + 5_000));
+    await h.set(
+      "/page",
+      {
+        kind: "APP_PAGE",
+        body: Buffer.from("v2"),
+        headers: { "x-next-cache-tags": "menu" },
+      },
+      { kind: "APP_PAGE", cacheControl: { revalidate: 300 } }
+    );
+    h.resetRequestCache();
+    const hit = await h.get("/page", { kind: "APP_PAGE" });
+    expect(hit).not.toBeNull();
+    expect(hit!.lastModified).toBe(T0 + 5_000);
+
+    // After the expire deadline, the same tag state is a hard miss.
+    vi.setSystemTime(new Date(T0 + 10 + 31536000 * 1000 + 1));
+    h.resetRequestCache();
+    expect(await h.get("/page", { kind: "APP_PAGE" })).toBeNull();
+  });
 });
 
 describe("incremental cacheHandler — Next 15 ctx compatibility", () => {

@@ -198,7 +198,15 @@ function isTagStateExpired(
   isFetch: boolean
 ): boolean {
   if (!state || typeof lastModified !== "number") return false;
-  if (typeof state.expired === "number" && state.expired >= lastModified) return true;
+  // Match Next's areTagsExpired: a future `expired` (e.g. revalidateTag(tag, 'max'))
+  // must not hard-miss until the deadline has actually passed.
+  if (
+    typeof state.expired === "number" &&
+    state.expired <= Date.now() &&
+    state.expired >= lastModified
+  ) {
+    return true;
+  }
   if (isFetch && typeof state.stale === "number" && state.stale >= lastModified) return true;
   return false;
 }
