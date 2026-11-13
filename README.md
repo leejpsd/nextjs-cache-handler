@@ -278,10 +278,9 @@ Full reference: [`docs/api.md`](./docs/api.md).
 |---|---|---|
 | **Self-hosted Redis 7+** | `{ type: "redis", url }` or `{ type: "ioredis", url }` | ✅ AWS ElastiCache (staging, 24h observation) |
 | **Redis Cluster** | `{ type: "cluster", nodes }` + `hashTag: true` | ✅ e2e-tested against a real 3-master cluster (CI); not yet load-tested at scale |
-| **Upstash Redis** | `{ type: "redis", url: "rediss://..." }` (TLS auto-detected) | not yet validated, expected to work via the standard Redis protocol |
+| **Upstash Redis** (including stores migrated from Vercel KV) | `{ type: "redis", url: "rediss://..." }` (TLS auto-detected) | not yet validated, expected to work via the standard Redis protocol |
 | **AWS ElastiCache (replication group)** | `{ type: "redis", url: "rediss://..." }` | ✅ reference deployment (re-verified 2026-08-01, Seoul) |
 | **Redis Sentinel** | `{ type: "sentinel", sentinels, name }` | ✅ local master/replica failover drill |
-| **Vercel KV** | not yet supported — dedicated adapter on the roadmap | — |
 | **DragonflyDB / KeyDB** | Redis-protocol compatible — `{ type: "redis", url }` should work | not validated |
 
 ---
@@ -454,7 +453,7 @@ ESM and CJS dual-published, full TypeScript types, validated via
   - *1.0.3* — `cacheHandler`: `revalidateTag` rejects when the tag state
     could not be written (no Redis connection) instead of reporting
     success ✅
-- **Next** — Vercel KV / Upstash adapters, `'use cache: remote'` multi-tier
+- **Next** — Upstash validation, `'use cache: remote'` multi-tier
   setup, `neshClassicCache` equivalent. All additive; no 2.0 needed.
 
 ---
