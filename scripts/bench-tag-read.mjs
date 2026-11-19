@@ -80,6 +80,26 @@ await scan.set(
     revalidate: 60,
   })
 );
+// 50 more entries, 5 tags each, for the "one page, many 'use cache' calls" case.
+const pageKeys = Array.from({ length: 50 }, (_, i) => `bench-fn-${i}`);
+for (const [i, key] of pageKeys.entries()) {
+  await scan.set(
+    key,
+    Promise.resolve({
+      value: new ReadableStream({
+        start(c) {
+          c.enqueue(new Uint8Array(Buffer.from("x".repeat(512))));
+          c.close();
+        },
+      }),
+      tags: tags.slice((i * 5) % T, ((i * 5) % T) + 5),
+      stale: 60,
+      timestamp: Date.now(),
+      expire: 3600,
+      revalidate: 60,
+    })
+  );
+}
 const dbsize = await raw.dbSize();
 await new Promise((r) => setTimeout(r, 2000)); // let seeding settle
 
@@ -108,6 +128,17 @@ const rows = [
   ['on-demand: refreshTags()', () => onDemand.refreshTags()],
   ['on-demand: get()', () => onDemand.get("bench-page", softTags)],
   [
+    "scan:      refreshTags() + 50 parallel get()",
+    async () => {
+      await scan.refreshTags();
+      await Promise.all(pageKeys.map((k) => scan.get(k, softTags)));
+    },
+  ],
+  [
+    "on-demand: 50 parallel get()",
+    () => Promise.all(pageKeys.map((k) => onDemand.get(k, softTags))),
+  ],
+  [
     "raw MGET of 7 markers",
     () =>
       raw.mGet(
@@ -120,7 +151,7 @@ const rows = [
 
 console.log(`keys=${dbsize} tags=${T} runs=${RUNS} redis=${url}`);
 for (const [label, fn] of rows) {
-  console.log(`${label.padEnd(26)} ${fmt(await time(fn, RUNS))}`);
+  console.log(`${label.padEnd(46)} ${fmt(await time(fn, RUNS))}`);
 }
 
 await raw.quit();

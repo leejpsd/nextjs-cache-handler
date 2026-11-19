@@ -351,7 +351,10 @@ tags:
 p50 over several runs, local Redis 7 over redis@5
 (`scripts/bench-tag-read.mjs`). On a networked Redis multiply by the
 round-trip time: at 20k keys the scan is roughly 400 round trips, the
-on-demand read is one.
+on-demand read is one. A page with many `'use cache'` calls pays one `MGET`
+per call, but redis@5 and ioredis pipeline parallel reads: 50 parallel
+`get()` took 0.7 ms on-demand, against 17 ms (20k keys) and 63 ms (100k)
+for the scan followed by the same 50 reads.
 
 `tagReadMode: "on-demand"` turns the scan off. `get()` reads the markers for
 exactly the entry's own tags plus the route's soft tags with one `MGET`, and

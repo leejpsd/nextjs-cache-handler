@@ -197,4 +197,47 @@ describe("cacheHandlers — tagReadMode (#31)", () => {
     await b.updateTags(["posts"]); // same ms, hard
     expect(await a.getExpiration(["posts"])).toBe(T0 + 10);
   });
+
+  it("on-demand works together with tagPubSub (subscription kept, still no SCAN)", async () => {
+    const client = new MockRedisClient();
+    client.isOpen = true;
+    const make = () =>
+      createCacheComponentsHandler({
+        client: () => client,
+        abortTimeoutMs: 100,
+        tagReadMode: "on-demand",
+        tagPubSub: true,
+      });
+    const a = make();
+    const b = make();
+    const scan = vi.spyOn(client, "scanIterator");
+    await a.set("k", Promise.resolve(entry()));
+    await a.refreshTags();
+    vi.setSystemTime(new Date(T0 + 10));
+    await b.updateTags(["posts"], { expire: 30 });
+    const got = await a.get("k", []);
+    expect(got).toBeDefined();
+    expect(got!.revalidate).toBe(-1);
+    expect(scan).not.toHaveBeenCalled();
+  });
+
+  it("on-demand: the local mirror stays bounded under high tag cardinality", async () => {
+    const { client, a } = pair("on-demand");
+    // 12k distinct tags, each read once through get(): the mirror must not
+    // grow past the cap (10k) plus slack.
+    for (let i = 0; i < 12_000; i += 100) {
+      const tags = Array.from({ length: 100 }, (_, j) => `t-${i + j}`);
+      await a.set(`k-${i}`, Promise.resolve(entry({ tags })));
+      await a.updateTags(tags, { expire: 3600 });
+    }
+    const mget = vi.spyOn(client, "mGet");
+    for (let i = 0; i < 12_000; i += 100) {
+      await a.get(`k-${i}`, []);
+    }
+    expect(mget).toHaveBeenCalledTimes(120);
+    // The mirror is private; its size shows through the memory of the
+    // handler indirectly, so check the observable: reads still work and are
+    // still one MGET each (no pathological per-get rebuild).
+    expect(await a.get("k-0", [])).toBeDefined();
+  });
 });

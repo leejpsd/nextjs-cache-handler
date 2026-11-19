@@ -356,7 +356,14 @@ async function readTagMarkersOnDemand(
       if (st) mergeTagState(state.localTagTimestamps, tag, st);
     }
     // Nothing rebuilds the mirror wholesale in this mode, so cap it here.
-    pruneOldestByTimestamp(state.localTagTimestamps, MAX_LOCAL_TAG_ENTRIES);
+    // Prune with slack: trimming to 90% once over the cap means the sort runs
+    // once per ~1k new tags instead of on every get() while at the cap.
+    if (state.localTagTimestamps.size > MAX_LOCAL_TAG_ENTRIES) {
+      pruneOldestByTimestamp(
+        state.localTagTimestamps,
+        Math.floor(MAX_LOCAL_TAG_ENTRIES * 0.9)
+      );
+    }
     state.emit({
       type: "tag.expiration.read",
       meta: { source: "redis", op, count: tags.length },
