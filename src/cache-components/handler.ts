@@ -97,10 +97,16 @@ function decodeTagMarker(raw: string): TagState | null {
   return { s, e: Number.isFinite(e) ? e : s };
 }
 
-/** Monotonic merge: never move a tag's state backwards in time. */
+/**
+ * Monotonic merge: never move a tag's state backwards in time. Two
+ * invalidations stamped in the same millisecond (a soft and a hard one from
+ * different instances) keep the stricter deadline.
+ */
 function mergeTagState(map: Map<string, TagState>, tag: string, next: TagState): void {
   const prev = map.get(tag);
-  if (!prev || next.s > prev.s) map.set(tag, next);
+  if (!prev || next.s > prev.s || (next.s === prev.s && next.e < prev.e)) {
+    map.set(tag, next);
+  }
 }
 
 // ─── Public factory contract ─────────────────────────────────────────────────
@@ -136,6 +142,7 @@ interface HandlerState {
       | "singleFlight"
       | "singleFlightLockTtlSec"
       | "tagPubSub"
+      | "tagReadMode"
     >
   > & { rest: CacheHandlerOptions };
   /** Stable instance identifier baked into refresh-lock owner field. Helps
@@ -187,6 +194,7 @@ function init(opts: CacheHandlerOptions): HandlerState {
       keyPrefix: opts.keyPrefix ?? DEFAULT_KEY_PREFIX,
       singleFlight: opts.singleFlight ?? false,
       tagPubSub: opts.tagPubSub ?? false,
+      tagReadMode: opts.tagReadMode === "on-demand" ? "on-demand" : "scan",
       singleFlightLockTtlSec:
         opts.singleFlightLockTtlSec ?? DEFAULT_LOCK_TTL_SEC,
       rest: opts,
@@ -303,6 +311,76 @@ function resolveTtlSeconds(entry: CacheComponentsEntry): number {
   return FALLBACK_TTL_SEC;
 }
 
+// ─── Tag state lookup ────────────────────────────────────────────────────────
+
+/**
+ * The tag state `get()` compares against. Two mirrors are consulted:
+ * `localTagTimestamps` (rebuilt by the scan, or filled per entry in on-demand
+ * mode) and `memTagExp` (this instance's own invalidations and pub/sub
+ * messages, never scan-rebuilt). Whichever was invalidated more recently wins.
+ */
+function resolveTagState(state: HandlerState, tag: string): TagState | undefined {
+  const local = state.localTagTimestamps.get(tag);
+  const mem = state.memTagExp.get(tag);
+  return local && mem ? (local.s >= mem.s ? local : mem) : (local ?? mem);
+}
+
+/**
+ * `tagReadMode: "on-demand"`: fetch the markers for exactly these tags with
+ * one MGET and fold them into the local mirror (monotonic merge) instead of
+ * relying on the per-request SCAN in refreshTags(). Returns false when Redis
+ * could not answer; the caller decides whether the local mirror is enough.
+ */
+async function readTagMarkersOnDemand(
+  state: HandlerState,
+  tags: string[],
+  op: "get" | "getExpiration"
+): Promise<boolean> {
+  if (tags.length === 0) return true;
+  try {
+    const values = await withAbortSignal(
+      `cacheHandlers.${op}.tags`,
+      state.opts.abortTimeoutMs,
+      async () => {
+        const client = await state.conn.getOrConnect();
+        if (!client) return null;
+        return await client.mGet(tags.map((t) => tagExpKey(state, t)));
+      }
+    );
+    if (values === null) return false;
+    for (let i = 0; i < tags.length; i += 1) {
+      const v = values[i];
+      const tag = tags[i];
+      if (!v || tag === undefined) continue;
+      const st = decodeTagMarker(v);
+      if (st) mergeTagState(state.localTagTimestamps, tag, st);
+    }
+    // Nothing rebuilds the mirror wholesale in this mode, so cap it here.
+    // Prune with slack: trimming to 90% once over the cap means the sort runs
+    // once per ~1k new tags instead of on every get() while at the cap.
+    if (state.localTagTimestamps.size > MAX_LOCAL_TAG_ENTRIES) {
+      pruneOldestByTimestamp(
+        state.localTagTimestamps,
+        Math.floor(MAX_LOCAL_TAG_ENTRIES * 0.9)
+      );
+    }
+    state.emit({
+      type: "tag.expiration.read",
+      meta: { source: "redis", op, count: tags.length },
+    });
+    return true;
+  } catch (err) {
+    if (err instanceof CacheTimeoutError) {
+      state.emit({ type: "redis.timeout", meta: { op: `${op}.tags` } });
+    } else {
+      state.logger.warn("on-demand tag read failed, using the local mirror", {
+        message: (err as Error).message,
+      });
+    }
+    return false;
+  }
+}
+
 // ─── get() ───────────────────────────────────────────────────────────────────
 
 async function getImpl(
@@ -411,6 +489,18 @@ async function getImpl(
   const freshnessTags =
     softTags.length > 0 ? [...softTags, ...envelope.tags] : envelope.tags;
   let tagStale = false;
+  if (
+    useRedis &&
+    state.opts.tagReadMode === "on-demand" &&
+    freshnessTags.length > 0
+  ) {
+    // No per-request scan in this mode: read exactly this entry's markers.
+    const ok = await readTagMarkersOnDemand(state, freshnessTags, "get");
+    if (!ok && state.opts.fallback === "never") {
+      state.emit({ type: "cache.miss", meta: { reason: "tag-read-failed" } });
+      return undefined;
+    }
+  }
   if (freshnessTags.length > 0) {
     const now = Date.now();
     for (const t of freshnessTags) {
@@ -419,9 +509,7 @@ async function getImpl(
       // message whose PUBLISHER clock lags the local scanStart can be
       // rejected by the carry-over while SCAN missed its just-written
       // marker — memTagExp retains it (size-pruned, never scan-rebuilt).
-      const local = state.localTagTimestamps.get(t);
-      const mem = state.memTagExp.get(t);
-      const st = local && mem ? (local.s >= mem.s ? local : mem) : (local ?? mem);
+      const st = resolveTagState(state, t);
       if (!st || st.s <= envelope.timestamp) continue;
       // Tag invalidated after this entry was written. Hard deadline passed
       // (hard invalidations have e === s, so they land here immediately)
@@ -708,6 +796,10 @@ async function refreshTagsImpl(state: HandlerState): Promise<void> {
   }
 
   void ensureTagSubscription(state);
+  if (state.opts.tagReadMode === "on-demand") {
+    // Markers are read per entry in get() / getExpiration(); nothing to scan.
+    return;
+  }
   try {
     await withAbortSignal(
       "cacheHandlers.refreshTags",
@@ -813,6 +905,17 @@ async function getExpirationImpl(
   // deadline (`entry.expired || 0` in default.js). The stale stamp is a
   // get()-side concern (served with revalidate: -1); reporting it here would
   // make Next discard soft-invalidated entries instead of refreshing them.
+  if (state.opts.tagReadMode === "on-demand" && gateRedis(state)) {
+    // Redis is the source of truth here: fetch these tags' markers, then
+    // answer from the merged state (a failed read answers from the mirror).
+    await readTagMarkersOnDemand(state, tags, "getExpiration");
+    let m = 0;
+    for (const t of tags) {
+      const st = resolveTagState(state, t);
+      if (st && Number.isFinite(st.e) && st.e > m) m = st.e;
+    }
+    return m;
+  }
   let max = 0;
   for (const t of tags) {
     const local = state.localTagTimestamps.get(t);

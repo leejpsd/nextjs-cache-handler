@@ -50,6 +50,7 @@ ctx contract are accepted (`ctx.cacheControl.revalidate` / `kind` and
 | `isBuildPhase` | `() => boolean` | `NEXT_PHASE === "phase-production-build"` | build-phase gate override |
 | `hashTag` | `boolean` | `false` | wrap namespace in `{}` — **required on Redis Cluster** (multi-key Lua) |
 | `tagPubSub` | `boolean` | `false` | push-based cross-instance tag propagation (plural handler; ~3ms); scan polling remains the safety net; unavailable on Cluster |
+| `tagReadMode` | `"scan" \| "on-demand"` | `"scan"` | plural handler only. `scan`: `refreshTags()` SCANs the namespace's tag markers once per request (cost grows with total keys in Redis, not with tags: ~20 ms at 20k keys, 65–170 ms at 100k on a local Redis). `on-demand`: no scan; `get()` and `getExpiration()` `MGET` exactly the tags they need (one extra round trip per `get()`). See [#31](https://github.com/leejpsd/nextjs-cache-handler/issues/31) |
 | `onMetric` | `(event: MetricEvent) => void` | — | telemetry hook; emitter errors are swallowed |
 | `logger` | `Logger` | console (warn+) | injectable 4-level logger |
 
