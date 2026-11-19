@@ -222,6 +222,7 @@ interface CacheHandlerOptions {
   staleWhileRevalidate?: boolean; // default: true (cache-components only)
   singleFlight?: boolean;         // default: false — see "Single-flight refresh lock" below
   singleFlightLockTtlSec?: number; // default: 10
+  tagReadMode?: "scan" | "on-demand"; // default: "scan" — see "Tag reads at scale" below
   isBuildPhase?: () => boolean;   // override PHASE_PRODUCTION_BUILD detection
   hashTag?: boolean;              // default: false (set true on Redis Cluster)
   memoryMaxEntries?: number;      // default: 1000 — LRU cap for the in-memory fallback
@@ -330,6 +331,46 @@ See [`docs/architecture.md`](./docs/architecture.md#single-flight-refresh-lock-v
 for the full state machine and a reference to the Lua script body.
 
 ---
+
+## Tag reads at scale: `tagReadMode` (v1.1)
+
+The `'use cache'` handler has to learn about invalidations made by other
+instances. By default (`tagReadMode: "scan"`) `refreshTags()` runs once per
+request and SCANs the namespace's tag markers into a local mirror, and
+`get()` checks tags against that mirror without touching Redis. Redis SCAN
+walks the whole keyspace regardless of the MATCH pattern, so that cost grows
+with the **total number of keys in the database**, not with the number of
+tags:
+
+| keys in Redis | tag markers | scan: `refreshTags()` per request | on-demand: `get()` including its `MGET` |
+|---|---|---|---|
+| 2.5k | 500 | 3–4 ms | 0.1 ms |
+| 20.5k | 500 | 17–35 ms | 0.1 ms |
+| 100k | 500 | 65–166 ms | 0.1 ms |
+
+p50 over several runs, local Redis 7 over redis@5
+(`scripts/bench-tag-read.mjs`). On a networked Redis multiply by the
+round-trip time: at 20k keys the scan is roughly 400 round trips, the
+on-demand read is one.
+
+`tagReadMode: "on-demand"` turns the scan off. `get()` reads the markers for
+exactly the entry's own tags plus the route's soft tags with one `MGET`, and
+`getExpiration()` does the same, so Redis stays the single source of truth
+and a request pays one extra round trip per cached entry instead of a scan.
+This is how the singular `cacheHandler` has always read tags. `tagPubSub`
+works in either mode.
+
+```js
+// cache-components.cjs
+module.exports = createCacheComponentsHandler({
+  client: { type: "redis", url: process.env.REDIS_URL },
+  tagReadMode: "on-demand",
+});
+```
+
+Reported in [#31](https://github.com/leejpsd/nextjs-cache-handler/issues/31).
+The default stays `"scan"` for now; it may become `"on-demand"` in a later
+minor once it has run in more deployments.
 
 ## OpenTelemetry instrumentation (v0.2)
 

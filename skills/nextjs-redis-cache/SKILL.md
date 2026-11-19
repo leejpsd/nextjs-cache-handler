@@ -119,6 +119,7 @@ Facts that prevent misdiagnosis:
 | `hashTag: true` | off | REQUIRED on Redis Cluster |
 | `onMetric` | — | Wire `createOtelMetricEmitter()` from `@leejpsd/nextjs-cache-handler/otel` |
 | `tagPubSub: true` | off | 0.4+: push-based cross-instance invalidation (~3ms vs seconds); polling stays as safety net; not on Cluster |
+| `tagReadMode: "on-demand"` | `"scan"` | 1.1+: Redis holds many keys (tens of thousands) and `refreshTags()` shows up in request latency. Skips the per-request SCAN; `get()` MGETs only the entry's tags (one extra round trip) |
 
 Reliability built in (0.3+): reconnect with exponential backoff (1s→30s cap),
 bounded memory fallback, per-op timeouts. A Redis outage degrades to

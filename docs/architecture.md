@@ -104,12 +104,21 @@ set(cacheKey, pendingEntry: Promise<CacheEntry>)
 For multi-instance deployments:
 
 1. `updateTags()` writes a per-tag timestamp to Redis (the marker key).
-2. `refreshTags()` is called before each request. It scans
-   `next-cache:tag-expiration:{ns}:*` and updates `localTagTimestamps`.
+2. `refreshTags()` is called before each request. In the default
+   `tagReadMode: "scan"` it scans `next-cache:tag-expiration:{ns}:*` and
+   updates `localTagTimestamps`. Redis SCAN walks the whole keyspace, so
+   this costs about 20 ms per request at 20k keys and 65–170 ms at 100k
+   (local Redis), whatever the number of tags.
 3. `getExpiration([t1, t2])` returns `Math.max(timestamps)` from the local
    mirror.
 4. `get(cacheKey, softTags)` consults `localTagTimestamps` and treats the
    entry as stale if any soft tag was invalidated after `entry.timestamp`.
+
+With `tagReadMode: "on-demand"` (#31) step 2 is a no-op and steps 3 and 4
+read the markers for exactly the tags they are given with one `MGET`,
+merging them into the local mirror, so Redis stays the source of truth and
+no request pays for a scan. That is also how the singular handler has always
+read tags.
 
 The reference implementation in next-redis-cache-demo measured **6.4 ms**
 mean propagation across two ECS tasks under sustained load with this

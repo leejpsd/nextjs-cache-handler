@@ -248,6 +248,27 @@ export interface CacheHandlerOptions {
   tagPubSub?: boolean;
 
   /**
+   * How the `'use cache'` handler learns about tag invalidations made by
+   * other instances (plural handler only).
+   *
+   * - `"scan"` (default): `refreshTags()` runs once per request and SCANs the
+   *   namespace's tag markers into a local mirror; `get()` then checks tags
+   *   against that mirror without touching Redis. Redis SCAN walks the whole
+   *   keyspace regardless of the MATCH pattern, so the per-request cost grows
+   *   with the total number of keys in the database (about 20 ms at 20k keys
+   *   and 65–170 ms at 100k against a local Redis), not with the number of tags.
+   * - `"on-demand"`: `refreshTags()` does nothing, and `get()` reads the
+   *   markers for the entry's own tags plus the route's soft tags with one
+   *   `MGET`, the way the singular handler and `getExpiration()` already do.
+   *   One extra round trip per `get()`, no per-request scan, and Redis stays
+   *   the single source of truth. `tagPubSub` works in either mode.
+   *
+   * Default: `"scan"`. Switch to `"on-demand"` when `refreshTags()` shows up
+   * in request latency (#31).
+   */
+  tagReadMode?: "scan" | "on-demand";
+
+  /**
    * Single-flight refresh lock for the SWR boundary.
    *
    * When enabled, only one handler instance per cache key attempts a
