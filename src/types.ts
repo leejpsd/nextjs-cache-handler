@@ -271,16 +271,17 @@ export interface CacheHandlerOptions {
   /**
    * Single-flight refresh lock for the SWR boundary.
    *
-   * When enabled, only one handler instance per cache key attempts a
-   * background refresh during the stale window. Other instances continue
-   * serving the same stale entry until the leader publishes a fresh one or
-   * the lock TTL expires. Prevents N parallel refreshes (cache stampede)
-   * when many instances cross the `revalidate` boundary at the same time.
+   * When enabled, the first handler instance to read a stale entry takes a
+   * short Redis lock for that cache key and is reported as the leader
+   * (`cache.stale.refresh.leader`); the others are reported as followers
+   * (`cache.stale.refresh.follower`). The lock is a signal, not a guard:
+   * Next.js decides to refresh after `get()` returns, so every instance
+   * still serves the stale entry and still runs its own refresh. Use the
+   * two events to measure how many instances refresh the same entry at
+   * once.
    *
-   * Default: `false`. The marginal benefit at small scale is small because
-   * Next.js already serializes per-cacheKey refresh per process; turn this
-   * on when you have many instances and observe duplicate origin work
-   * around the revalidate boundary.
+   * Default: `false`. Costs one Redis round trip per stale read; with one
+   * or two instances there is little duplicate work to measure.
    */
   singleFlight?: boolean;
 
