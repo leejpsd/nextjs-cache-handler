@@ -45,7 +45,7 @@ ctx contract are accepted (`ctx.cacheControl.revalidate` / `kind` and
 | `memoryMaxEntries` | `number` | `1000` | LRU cap for the in-memory fallback (and its tag index) |
 | `compression` | `"gzip" \| "brotli"` | off | transparent Redis value compression (node:zlib). Reads auto-detect, so mixed fleets interoperate; < 1 KiB stored plain |
 | `staleWhileRevalidate` | `boolean` | `true` | plural handler only: serve stale in the SWR window |
-| `singleFlight` | `boolean` | `false` | opt-in refresh lock at the SWR boundary (stampede suppression) |
+| `singleFlight` | `boolean` | `false` | opt-in refresh lock at the SWR boundary (leader/follower metrics; does not suppress refreshes) |
 | `singleFlightLockTtlSec` | `number` | `10` | lock TTL for `singleFlight` |
 | `isBuildPhase` | `() => boolean` | `NEXT_PHASE === "phase-production-build"` | build-phase gate override |
 | `hashTag` | `boolean` | `false` | wrap namespace in `{}` — **required on Redis Cluster** (multi-key Lua) |

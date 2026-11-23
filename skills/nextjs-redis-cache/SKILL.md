@@ -114,7 +114,7 @@ Facts that prevent misdiagnosis:
 | `compression: "gzip"\|"brotli"` | off | Large RSC payloads; safe to enable on a live cache (reads auto-detect) |
 | `memoryMaxEntries` | 1000 | LRU cap of the in-memory outage fallback |
 | `fallback: "auto"\|"always"\|"never"` | auto | `never` = strict (miss on Redis failure); `always` = no Redis (build/dev) |
-| `singleFlight: true` | off | Many instances + observed duplicate origin work at revalidate boundaries |
+| `singleFlight: true` | off | To measure duplicate refresh work across instances at revalidate boundaries (leader/follower metrics; it does not suppress refreshes) |
 | `abortTimeoutMs` | 1500 | Per-op Redis deadline; timeouts degrade to miss |
 | `hashTag: true` | off | REQUIRED on Redis Cluster |
 | `onMetric` | — | Wire `createOtelMetricEmitter()` from `@leejpsd/nextjs-cache-handler/otel` |

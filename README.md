@@ -296,12 +296,14 @@ refresh — N parallel re-renders for the same key, each hitting your
 origin once.
 
 `singleFlight: true` adds an opt-in Redis lock (`refresh-tag-lock.lua`,
-default TTL 10s) at the SWR boundary. The first instance to acquire it
-becomes the **leader** and runs the refresh; the rest become
-**followers**, keep serving the same stale entry, and wait for the
-leader's write to land. The lock is observability-only at the handler
-layer — Next.js still drives the actual refresh; we just suppress the
-stampede.
+default TTL 10s) at the SWR boundary. The first instance to read a stale
+entry acquires it and is reported as the **leader**; the others are
+reported as **followers**. The lock is a signal, not a guard: Next.js
+decides to refresh after `get()` returns, so every instance still serves
+the stale entry and still runs its own refresh. What you get is a
+per-key count of how many instances refresh the same entry at once,
+which tells you whether duplicate refresh work is worth solving in your
+setup.
 
 ```js
 createCacheComponentsHandler({
@@ -315,17 +317,24 @@ Two new `MetricEvent` types appear on `onMetric`:
 
 | event type | meaning |
 |---|---|
-| `cache.stale.refresh.leader` | this instance just acquired the lock and is the designated refresher |
-| `cache.stale.refresh.follower` | another instance holds the lock; we serve stale and skip the refresh |
+| `cache.stale.refresh.leader` | this instance acquired the lock: it was the first to see this entry stale within the lock TTL |
+| `cache.stale.refresh.follower` | another instance holds the lock; this one serves the stale entry too, and Next.js still refreshes it here |
 
 If lock acquisition fails (Redis hiccup, TTL race), the handler
-defaults to the follower path — the stale entry is always served, never
-dropped. This is intentional: the lock is an optimization, not a
+reports the follower path — the stale entry is always served, never
+dropped. This is intentional: the lock is a measurement, not a
 correctness-critical primitive.
 
-When **not** to enable single-flight: small fleets (1–2 instances) where
-Next's per-process serialization already covers the stampede risk.
-Adding a Redis round-trip per stale read isn't free.
+When **not** to enable single-flight: small fleets (1–2 instances),
+where there is little duplicate work to measure. Adding a Redis
+round-trip per stale read isn't free.
+
+The handler does not coalesce refreshes or misses across instances, and
+it keeps no in-process copy of entries in front of Redis. If you need
+either, [#34](https://github.com/leejpsd/nextjs-cache-handler/issues/34)
+has a small wrapper for the singular `cacheHandler` (in-process L1,
+shared reads, a latch for concurrent `fetch` misses), with notes on what
+Next.js already de-duplicates.
 
 See [`docs/architecture.md`](./docs/architecture.md#single-flight-refresh-lock-v02-)
 for the full state machine and a reference to the Lua script body.
