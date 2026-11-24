@@ -9,10 +9,14 @@
  *   - cross-"instance" (two handler objects) tag propagation on a cluster
  *   - tagPubSub degrades gracefully (no subscribe on the cluster adapter)
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { createCacheComponentsHandler } from "../../src/cache-components/index.js";
 import { createIncrementalCacheHandler } from "../../src/incremental/index.js";
+import {
+  adaptCluster,
+  createIoredisCluster,
+} from "../../src/shared/client/adapter-ioredis.js";
 import {
   bufferToStream,
   readStreamFully,
@@ -128,5 +132,56 @@ describe("Redis Cluster e2e — cacheHandler (ISR)", () => {
     await h.revalidateTag("posts"); // hard
     h.resetRequestCache();
     expect(await h.get("/page", { kind: "APP_PAGE" })).toBeNull();
+  });
+
+  const multiTagPage = {
+    kind: "APP_PAGE" as const,
+    body: Buffer.from("multi-tag"),
+    headers: { "x-next-cache-tags": "posts,authors,_N_T_/page" },
+  };
+  const ctx = { kind: "APP_PAGE", cacheControl: { revalidate: 300 } };
+
+  it("tag states are read key by key on a cluster adapter: no MGET, invalidation still seen (#34)", async () => {
+    const ns = `cl-${Math.floor(Math.random() * 1e9)}`;
+    const client = adaptCluster(createIoredisCluster({ type: "cluster", nodes: NODES }));
+    const Handler = createIncrementalCacheHandler({
+      client: () => client,
+      hashTag: true,
+      abortTimeoutMs: 3000,
+      buildNamespace: ns,
+    });
+    const mget = vi.spyOn(client, "mGet");
+
+    await new Handler().set("/multi", multiTagPage, ctx);
+    expect(await new Handler().get("/multi", ctx)).not.toBeNull();
+    await new Handler().revalidateTag("authors"); // hard, one of three tags
+    expect(await new Handler().get("/multi", ctx)).toBeNull();
+    expect(mget).not.toHaveBeenCalled();
+  });
+
+  it("a cluster client without the isCluster flag or hashTag latches on the first CROSSSLOT and loses nothing", async () => {
+    const ns = `cl-${Math.floor(Math.random() * 1e9)}`;
+    const flagged = adaptCluster(createIoredisCluster({ type: "cluster", nodes: NODES }));
+    // Same adapter, flag hidden: what a raw Cluster client from a user factory looks like.
+    const client = Object.create(flagged, { isCluster: { value: undefined } }) as typeof flagged;
+    const warns: string[] = [];
+    const Handler = createIncrementalCacheHandler({
+      client: () => client,
+      abortTimeoutMs: 3000,
+      buildNamespace: ns,
+      logger: { debug() {}, info() {}, warn: (m: string) => warns.push(m), error() {} },
+    });
+    const mget = vi.spyOn(client, "mGet");
+
+    await new Handler().set("/latch", multiTagPage, ctx);
+    await new Handler().revalidateTag("posts"); // hard, before the first read
+    // First read: MGET → CROSSSLOT → per-key retry in the same read.
+    expect(await new Handler().get("/latch", ctx)).toBeNull();
+    expect(mget).toHaveBeenCalledTimes(1);
+    expect(warns.filter((w) => /CROSSSLOT/.test(w))).toHaveLength(1);
+
+    await new Handler().set("/latch-2", multiTagPage, ctx);
+    expect(await new Handler().get("/latch-2", ctx)).not.toBeNull();
+    expect(mget).toHaveBeenCalledTimes(1); // latched: no second probe
   });
 });

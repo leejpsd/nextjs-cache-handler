@@ -20,6 +20,7 @@ interface MockOptions {
 
 export class MockRedisClient implements RedisClientLike {
   isOpen = false;
+  isCluster?: boolean;
   readonly kv = new Map<string, string>();
   readonly sets = new Map<string, Set<string>>();
   readonly errorListeners: Array<(err: Error) => void> = [];

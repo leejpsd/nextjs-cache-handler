@@ -16,6 +16,7 @@ type AnyRedis = Redis | Cluster;
 
 function adapt(client: AnyRedis, isClusterClient = false): RedisClientLike {
   return {
+    isCluster: isClusterClient,
     get isOpen() {
       // ioredis exposes a `status` string. Both single-node and cluster
       // report "ready" once connected.

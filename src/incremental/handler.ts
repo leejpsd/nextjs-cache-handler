@@ -28,6 +28,7 @@ import type {
   IncrementalCacheData,
   Logger,
   MetricEmitter,
+  RedisClientLike,
 } from "../types.js";
 
 import {
@@ -92,6 +93,15 @@ interface HandlerState {
   /** Tag states, by bare tag (no namespace prefix — see tagMetaKey comment). */
   memTagStates: Map<string, TagState>;
   resolveNs: () => string;
+  /**
+   * How `readTagStates` fetches tag markers. `"mget"` (default) reads all of
+   * an entry's tags with one command. `"per-key"` sends one GET per tag; it is
+   * what Redis Cluster needs, because tag keys are deliberately un-namespaced
+   * (cross-deploy semantics) and so never share a hash slot. Starts as
+   * `"per-key"` when the options say Cluster (`hashTag: true`) and flips to it
+   * for good the first time an MGET fails with CROSSSLOT.
+   */
+  tagReadStrategy: "mget" | "per-key";
 }
 
 function gateRedis(state: HandlerState): boolean {
@@ -125,6 +135,10 @@ function init(opts: CacheHandlerOptions): HandlerState {
     memEntries: new MemoryStore<string>(opts.memoryMaxEntries),
     memTagStates: new Map(),
     resolveNs: () => resolveBuildNamespace(opts.buildNamespace),
+    // `hashTag` is only ever set for Cluster, so skip the MGET that would
+    // fail there. Everything else starts optimistic and may still latch to
+    // per-key on a CROSSSLOT reply (see readTagValues).
+    tagReadStrategy: opts.hashTag ? "per-key" : "mget",
   };
 }
 
@@ -253,14 +267,17 @@ async function readTagStates(
       async () => {
         const client = await state.conn.getOrConnect();
         if (!client) return tags.map((t) => state.memTagStates.get(t) ?? null);
-        // Per-key GETs, not MGET: ISR tag keys are deliberately un-namespaced
-        // (cross-deploy semantics), so on Redis Cluster a multi-tag MGET is a
-        // guaranteed CROSSSLOT error — which the outer catch would silently
-        // swallow, disabling cross-instance revalidateTag for multi-tag
-        // entries. Auto-pipelining makes the fan-out one round trip anyway.
-        const values = await Promise.all(
-          tags.map((t) => client.get(tagMetaKey(state, t)))
-        );
+        const keys = tags.map((t) => tagMetaKey(state, t));
+        const values = await readTagValues(state, client, keys);
+        state.emit({
+          type: "tag.expiration.read",
+          meta: {
+            source: "redis",
+            op: "incremental.get",
+            count: tags.length,
+            strategy: state.tagReadStrategy,
+          },
+        });
         return values.map((v) => {
           if (!v) return null;
           try {
@@ -274,6 +291,54 @@ async function readTagStates(
   } catch {
     return tags.map((t) => state.memTagStates.get(t) ?? null);
   }
+}
+
+/**
+ * Fetch the raw marker values for `keys`.
+ *
+ * One `MGET` on a single node: one command whatever the tag count, which is
+ * what per-command pricing (Upstash) and command-rate limits see (#34). On
+ * Redis Cluster the keys sit in different slots, so an `MGET` is refused
+ * with CROSSSLOT: a client flagged `isCluster` (or options with `hashTag`)
+ * goes key by key from the start, and an unflagged Cluster client is caught
+ * on its first CROSSSLOT reply, which latches the handler to per-key reads
+ * and is retried in place so that read loses nothing. Per-key GETs are
+ * auto-pipelined by both supported clients, so they still cost one round
+ * trip; only the command count differs.
+ */
+async function readTagValues(
+  state: HandlerState,
+  client: RedisClientLike,
+  keys: string[]
+): Promise<(string | null)[]> {
+  if (keys.length === 1) return [await client.get(keys[0]!)];
+  if (state.tagReadStrategy === "mget" && client.isCluster) {
+    state.tagReadStrategy = "per-key";
+  }
+  if (state.tagReadStrategy === "mget") {
+    try {
+      return await client.mGet(keys);
+    } catch (err) {
+      if (!isCrossSlotError(err)) throw err;
+      state.tagReadStrategy = "per-key";
+      state.logger.warn(
+        "MGET of tag states hit CROSSSLOT (Redis Cluster); reading tag states key by key from now on. Set hashTag: true to skip this probe."
+      );
+    }
+  }
+  return Promise.all(keys.map((k) => client.get(k)));
+}
+
+/**
+ * Two spellings of the same refusal: the server's `CROSSSLOT Keys in request
+ * don't hash to the same slot`, and ioredis's client-side check when
+ * auto-pipelining is on, `All the keys in a pipeline command should belong
+ * to the same slot`, which never reaches the server.
+ */
+function isCrossSlotError(err: unknown): boolean {
+  const message =
+    err instanceof Error ? err.message : typeof err === "string" ? err : "";
+  return /CROSSSLOT|same slot/i.test(message);
 }
 
 // ─── Handler class ──────────────────────────────────────────────────────────

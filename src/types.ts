@@ -58,6 +58,14 @@ export interface RedisClientLike {
    * both of which are used as fallbacks when this is absent.
    */
   dispose?(): void;
+  /**
+   * `true` when the client talks to a Redis Cluster, where a multi-key
+   * command fails with `CROSSSLOT` unless every key hashes to the same slot.
+   * The ISR handler then reads tag states key by key instead of with one
+   * `MGET`. Set by `adaptCluster`; a raw Cluster client passed through a
+   * factory without this flag is still detected on the first `CROSSSLOT`.
+   */
+  isCluster?: boolean;
 }
 
 export type RedisClientFactory = () =>
