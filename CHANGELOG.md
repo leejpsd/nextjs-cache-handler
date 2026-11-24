@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.1.1
+
+### Patch Changes
+
+- [#36](https://github.com/leejpsd/nextjs-cache-handler/pull/36) [`db92190`](https://github.com/leejpsd/nextjs-cache-handler/commit/db92190da33fa35d8e2815f7b209ec915e8b4743) Thanks [@leejpsd](https://github.com/leejpsd)! - ISR handler: read all of an entry's tag states with one `MGET` instead of one `GET` per tag (#34). A page with five `_N_T_` layout tags now costs two Redis commands per `get()` instead of six; round trips were already one thanks to auto-pipelining, so this matters for per-command pricing and command-rate limits. On Redis Cluster, where the un-namespaced tag keys never share a slot, the handler keeps reading key by key: from the start when the client is the Cluster adapter (new `isCluster` flag on `RedisClientLike`) or `hashTag: true` is set, otherwise from the first `CROSSSLOT` reply on, retrying that read in place and logging one warning. The same fallback applies when `MGET` can never work for another reason: an ACL that allows `GET` but not `MGET`, a server that does not know the command, or a custom client without a usable `mGet`. `tag.expiration.read` is now also emitted by the ISR handler with `meta.strategy` (`"mget"` or `"per-key"`).
+
+- [#35](https://github.com/leejpsd/nextjs-cache-handler/pull/35) [`877ebee`](https://github.com/leejpsd/nextjs-cache-handler/commit/877ebee03a49bbd49344a71b88194da249ef0b42) Thanks [@leejpsd](https://github.com/leejpsd)! - Docs: correct the `singleFlight` description. The lock reports which instance saw a stale entry first (`cache.stale.refresh.leader` / `.follower`); it does not stop other instances from refreshing, because Next.js decides to refresh after `get()` returns. The README, API reference, option JSDoc and agent skill said or implied that followers skip the refresh. No behavior change. Also links #34 for an in-process L1 and `fetch` miss coalescing wrapper.
+
 ## 1.1.0
 
 ### Minor Changes
