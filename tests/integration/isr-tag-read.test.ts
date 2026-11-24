@@ -117,3 +117,72 @@ for (const adapter of adapters) {
     );
   });
 }
+
+/**
+ * A Redis user whose ACL allows GET but not MGET. Without the per-key latch
+ * every multi-tag read would fall back to the local mirror and a second
+ * instance's invalidation would be missed (found in QA for #34).
+ */
+describe("integration: ISR tag reads with an ACL that denies MGET", () => {
+  const USER = "isr-no-mget";
+  const PASS = "pw";
+  let admin: import("redis").RedisClientType | undefined;
+
+  function aclUrl(): string {
+    const u = new URL(getRedisUrl());
+    u.username = USER;
+    u.password = PASS;
+    return u.toString();
+  }
+
+  beforeAll(async () => {
+    if (!probed) reachable = await isRedisReachable();
+    if (!reachable) return;
+    const { createClient } = require("redis") as typeof import("redis");
+    admin = createClient({ url: getRedisUrl() }) as import("redis").RedisClientType;
+    admin.on("error", () => {});
+    await admin.connect();
+    await admin.sendCommand([
+      "ACL",
+      "SETUSER",
+      USER,
+      "on",
+      `>${PASS}`,
+      "~*",
+      "&*",
+      "+@all",
+      "-mget",
+    ]);
+  });
+
+  afterAll(async () => {
+    if (!admin) return;
+    await admin.sendCommand(["ACL", "DELUSER", USER]);
+    await admin.flushAll();
+    await admin.quit();
+  });
+
+  it.skipIf(!reachable)(
+    "a hard revalidateTag on another instance is still seen, and the handler stops trying MGET",
+    async () => {
+      const warns: string[] = [];
+      const make = () =>
+        createIncrementalCacheHandler({
+          client: { type: "redis", url: aclUrl() },
+          keyPrefix: "next-incremental:",
+          buildNamespace: () => `${NAMESPACE}-acl`,
+          abortTimeoutMs: 3000,
+          logger: { debug() {}, info() {}, warn: (m: string) => warns.push(m), error() {} },
+        });
+      // Separate handler states stand in for two servers: no shared mirror.
+      const A = make();
+      const B = make();
+
+      await new A().set("/acl", page("posts,authors"), ctx);
+      expect(await new A().get("/acl", ctx)).not.toBeNull(); // probe: NOPERM → per-key
+      await new B().revalidateTag("authors");
+      expect(await new A().get("/acl", ctx)).toBeNull();
+      expect(warns.filter((w) => /NOPERM/.test(w))).toHaveLength(1); // only A reads
+    }
+  );
+});

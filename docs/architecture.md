@@ -127,7 +127,11 @@ keys are deliberately un-namespaced and so never share a slot; there the
 handler reads key by key (one auto-pipelined round trip, one command per
 tag). It knows it is on Cluster from the adapter's `isCluster` flag or
 `hashTag: true`, and otherwise latches to per-key reads on the first
-`CROSSSLOT` reply, retrying that read in place. `scripts/bench-isr-tag-read.mjs`
+`CROSSSLOT` reply, retrying that read in place. The same latch covers the
+other cases where `MGET` can never work: a Redis user whose ACL allows `GET`
+but not `MGET`, a server or proxy that does not know the command, and a
+custom client whose `mGet` is missing or malformed. Timeouts and dropped
+connections do not latch. `scripts/bench-isr-tag-read.mjs`
 prints the command count per `get()` for both strategies against a local
 Redis.
 

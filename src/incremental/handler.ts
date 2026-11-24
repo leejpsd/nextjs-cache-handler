@@ -301,10 +301,19 @@ async function readTagStates(
  * Redis Cluster the keys sit in different slots, so an `MGET` is refused
  * with CROSSSLOT: a client flagged `isCluster` (or options with `hashTag`)
  * goes key by key from the start, and an unflagged Cluster client is caught
- * on its first CROSSSLOT reply, which latches the handler to per-key reads
- * and is retried in place so that read loses nothing. Per-key GETs are
- * auto-pipelined by both supported clients, so they still cost one round
- * trip; only the command count differs.
+ * on its first refusal.
+ *
+ * Any sign that `MGET` cannot be used here latches the handler to per-key
+ * reads for good and retries that read in place, so nothing is lost: a
+ * cross-slot refusal, a Redis user whose ACL allows GET but not MGET, a
+ * server or proxy that does not know the command, or a custom client whose
+ * `mGet` is missing or does not return one value per key. Without the
+ * latch those would fall through to the local tag mirror on every read and
+ * silently miss invalidations made by other instances. Transient failures
+ * (timeouts, dropped connections) are rethrown and do not latch.
+ *
+ * Per-key GETs are auto-pipelined by both supported clients, so they still
+ * cost one round trip; only the command count differs.
  */
 async function readTagValues(
   state: HandlerState,
@@ -312,33 +321,61 @@ async function readTagValues(
   keys: string[]
 ): Promise<(string | null)[]> {
   if (keys.length === 1) return [await client.get(keys[0]!)];
-  if (state.tagReadStrategy === "mget" && client.isCluster) {
-    state.tagReadStrategy = "per-key";
+  if (state.tagReadStrategy === "mget") {
+    if (client.isCluster) {
+      state.tagReadStrategy = "per-key";
+    } else if (typeof client.mGet !== "function") {
+      latchPerKey(state, "the client has no mGet method");
+    }
   }
   if (state.tagReadStrategy === "mget") {
     try {
-      return await client.mGet(keys);
+      const values: unknown = await client.mGet(keys);
+      if (Array.isArray(values) && values.length === keys.length) {
+        return values as (string | null)[];
+      }
+      latchPerKey(state, "mGet did not return one value per key");
     } catch (err) {
-      if (!isCrossSlotError(err)) throw err;
-      state.tagReadStrategy = "per-key";
-      state.logger.warn(
-        "MGET of tag states hit CROSSSLOT (Redis Cluster); reading tag states key by key from now on. Set hashTag: true to skip this probe."
-      );
+      const reason = mgetRefusal(err);
+      if (!reason) throw err;
+      latchPerKey(state, reason);
     }
   }
   return Promise.all(keys.map((k) => client.get(k)));
 }
 
+/** Switch to per-key reads for the life of this handler; warn once. */
+function latchPerKey(state: HandlerState, reason: string): void {
+  // Concurrent first reads all see the same refusal; only the first warns.
+  if (state.tagReadStrategy === "per-key") return;
+  state.tagReadStrategy = "per-key";
+  state.logger.warn(
+    `MGET of tag states is not usable here (${reason}); reading tag states key by key from now on.`
+  );
+}
+
 /**
- * Two spellings of the same refusal: the server's `CROSSSLOT Keys in request
+ * Why an `MGET` error means "this command will never work here", or `null`
+ * for anything that may be transient.
+ *
+ * Cross-slot comes in two spellings: the server's `CROSSSLOT Keys in request
  * don't hash to the same slot`, and ioredis's client-side check when
  * auto-pipelining is on, `All the keys in a pipeline command should belong
  * to the same slot`, which never reaches the server.
  */
-function isCrossSlotError(err: unknown): boolean {
+function mgetRefusal(err: unknown): string | null {
   const message =
     err instanceof Error ? err.message : typeof err === "string" ? err : "";
-  return /CROSSSLOT|same slot/i.test(message);
+  if (/CROSSSLOT|same slot/i.test(message)) {
+    return "CROSSSLOT: Redis Cluster keeps these keys in different slots; set hashTag: true to skip this probe";
+  }
+  if (/NOPERM/i.test(message)) {
+    return "NOPERM: the Redis user may not run MGET";
+  }
+  if (/unknown command/i.test(message)) {
+    return "the server does not know MGET";
+  }
+  return null;
 }
 
 // ─── Handler class ──────────────────────────────────────────────────────────

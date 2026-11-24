@@ -203,4 +203,81 @@ describe("ISR handler — tag state reads (#34)", () => {
     await new Handler().revalidateTag("posts"); // hard
     expect(await new Handler().get("/blog", ctx)).toBeNull();
   });
+
+  it("a Redis user without MGET permission (NOPERM) latches and still sees invalidations", async () => {
+    const { Handler, client, warns } = setup();
+    const a = new Handler();
+    await a.set("/blog", page("posts,authors"), ctx);
+    vi.setSystemTime(new Date(T0 + 10));
+    await new Handler().revalidateTag("authors"); // hard
+    const mget = vi
+      .spyOn(client, "mGet")
+      .mockRejectedValue(new Error("NOPERM User app has no permissions to run the 'mget' command"));
+
+    // Without the latch this read would fall back to the local mirror and
+    // serve the entry as if nothing had been invalidated.
+    expect(await new Handler().get("/blog", ctx)).toBeNull();
+    await a.set("/other", page("x,y"), ctx);
+    expect(await new Handler().get("/other", ctx)).not.toBeNull();
+    expect(mget).toHaveBeenCalledTimes(1);
+    expect(warns.filter((w) => /NOPERM/.test(w))).toHaveLength(1);
+  });
+
+  it("a server that does not know MGET latches", async () => {
+    const { Handler, client } = setup();
+    await new Handler().set("/blog", page("posts,authors"), ctx);
+    const mget = vi
+      .spyOn(client, "mGet")
+      .mockRejectedValue(new Error("ERR unknown command 'mget'"));
+    expect(await new Handler().get("/blog", ctx)).not.toBeNull();
+    expect(await new Handler().get("/blog", ctx)).not.toBeNull();
+    expect(mget).toHaveBeenCalledTimes(1);
+  });
+
+  it("a custom client without mGet reads key by key", async () => {
+    const client = new MockRedisClient();
+    (client as unknown as { mGet?: unknown }).mGet = undefined;
+    const { Handler, warns } = setup({}, client);
+    await new Handler().set("/blog", page("posts,authors"), ctx);
+    vi.setSystemTime(new Date(T0 + 10));
+    await new Handler().revalidateTag("posts"); // hard
+    expect(await new Handler().get("/blog", ctx)).toBeNull();
+    expect(warns.filter((w) => /no mGet method/.test(w))).toHaveLength(1);
+  });
+
+  it("an mGet that does not return one value per key is not trusted", async () => {
+    const { Handler, client, warns } = setup();
+    await new Handler().set("/blog", page("posts,authors"), ctx);
+    vi.setSystemTime(new Date(T0 + 10));
+    await new Handler().revalidateTag("posts"); // hard
+    const mget = vi.spyOn(client, "mGet").mockResolvedValue([null] as unknown as (string | null)[]);
+    expect(await new Handler().get("/blog", ctx)).toBeNull();
+    expect(mget).toHaveBeenCalledTimes(1);
+    expect(warns.filter((w) => /one value per key/.test(w))).toHaveLength(1);
+  });
+
+  it("concurrent first reads that all hit the refusal warn once", async () => {
+    const { Handler, client, warns } = setup();
+    await new Handler().set("/a", page("posts,authors"), ctx);
+    await new Handler().set("/b", page("x,y"), ctx);
+    await new Handler().set("/c", page("m,n"), ctx);
+    vi.spyOn(client, "mGet").mockRejectedValue(new Error(CROSSSLOT));
+
+    const got = await Promise.all(["/a", "/b", "/c"].map((k) => new Handler().get(k, ctx)));
+    expect(got.every((g) => g !== null)).toBe(true);
+    expect(warns.filter((w) => /MGET of tag states/.test(w))).toHaveLength(1);
+  });
+
+  it("a timeout on MGET does not latch", async () => {
+    const { Handler, client } = setup();
+    await new Handler().set("/blog", page("posts,authors"), ctx);
+    const mget = vi.spyOn(client, "mGet").mockImplementationOnce(
+      () => new Promise(() => {}) // never settles → abortTimeoutMs fires
+    );
+    const pending = new Handler().get("/blog", ctx);
+    await vi.advanceTimersByTimeAsync(150);
+    expect(await pending).not.toBeNull(); // degraded to the local mirror
+    expect(await new Handler().get("/blog", ctx)).not.toBeNull();
+    expect(mget).toHaveBeenCalledTimes(2); // tried MGET again
+  });
 });

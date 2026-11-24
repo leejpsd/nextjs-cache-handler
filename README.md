@@ -269,7 +269,7 @@ Full reference: [`docs/api.md`](./docs/api.md).
       un-namespaced (so `revalidateTag` survives a deploy) and never share a
       slot. Without the flag, a Cluster client still works: the first
       `CROSSSLOT` reply switches that handler to per-key reads and logs one
-      warning.
+      warning. A Redis user whose ACL denies `MGET` is handled the same way.
 - [ ] **Redis `maxmemory-policy: allkeys-lru` or `noeviction`** — if you need
       bounded memory, choose `allkeys-lru`. Otherwise `noeviction` keeps
       tag indices intact.
