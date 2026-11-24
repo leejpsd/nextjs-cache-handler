@@ -116,7 +116,7 @@ Facts that prevent misdiagnosis:
 | `fallback: "auto"\|"always"\|"never"` | auto | `never` = strict (miss on Redis failure); `always` = no Redis (build/dev) |
 | `singleFlight: true` | off | To measure duplicate refresh work across instances at revalidate boundaries (leader/follower metrics; it does not suppress refreshes) |
 | `abortTimeoutMs` | 1500 | Per-op Redis deadline; timeouts degrade to miss |
-| `hashTag: true` | off | REQUIRED on Redis Cluster |
+| `hashTag: true` | off | REQUIRED on Redis Cluster (multi-key Lua; also switches ISR tag reads from one `MGET` to per-key GETs, which Cluster needs) |
 | `onMetric` | — | Wire `createOtelMetricEmitter()` from `@leejpsd/nextjs-cache-handler/otel` |
 | `tagPubSub: true` | off | 0.4+: push-based cross-instance invalidation (~3ms vs seconds); polling stays as safety net; not on Cluster |
 | `tagReadMode: "on-demand"` | `"scan"` | 1.1+: Redis holds many keys (tens of thousands) and `refreshTags()` shows up in request latency. Skips the per-request SCAN; `get()` MGETs only the entry's tags (one extra round trip) |

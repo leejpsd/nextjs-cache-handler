@@ -263,7 +263,13 @@ Full reference: [`docs/api.md`](./docs/api.md).
       Cluster support is validated by a dedicated e2e suite against a real
       3-master cluster (`npm run test:cluster`, also in CI) — covering the
       multi-key Lua scripts, per-master SCAN propagation, and both handlers.
-      Not yet load-tested at production scale.
+      Not yet load-tested at production scale. The flag also tells the ISR
+      handler to read tag states key by key: on a single node it reads all of
+      a page's tags with one `MGET`, but ISR tag keys are deliberately
+      un-namespaced (so `revalidateTag` survives a deploy) and never share a
+      slot. Without the flag, a Cluster client still works: the first
+      `CROSSSLOT` reply switches that handler to per-key reads and logs one
+      warning. A Redis user whose ACL denies `MGET` is handled the same way.
 - [ ] **Redis `maxmemory-policy: allkeys-lru` or `noeviction`** — if you need
       bounded memory, choose `allkeys-lru`. Otherwise `noeviction` keeps
       tag indices intact.

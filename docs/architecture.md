@@ -117,8 +117,23 @@ For multi-instance deployments:
 With `tagReadMode: "on-demand"` (#31) step 2 is a no-op and steps 3 and 4
 read the markers for exactly the tags they are given with one `MGET`,
 merging them into the local mirror, so Redis stays the source of truth and
-no request pays for a scan. That is also how the singular handler has always
-read tags.
+no request pays for a scan.
+
+The singular (ISR) handler has always read tags on demand too. Since #34 it
+reads all of an entry's tag states with one `MGET`, so a page carrying five
+`_N_T_` layout tags costs two commands per `get()` (entry + markers), not
+six. On Redis Cluster that `MGET` fails with `CROSSSLOT`, because ISR tag
+keys are deliberately un-namespaced and so never share a slot; there the
+handler reads key by key (one auto-pipelined round trip, one command per
+tag). It knows it is on Cluster from the adapter's `isCluster` flag or
+`hashTag: true`, and otherwise latches to per-key reads on the first
+`CROSSSLOT` reply, retrying that read in place. The same latch covers the
+other cases where `MGET` can never work: a Redis user whose ACL allows `GET`
+but not `MGET`, a server or proxy that does not know the command, and a
+custom client whose `mGet` is missing or malformed. Timeouts and dropped
+connections do not latch. `scripts/bench-isr-tag-read.mjs`
+prints the command count per `get()` for both strategies against a local
+Redis.
 
 The reference implementation in next-redis-cache-demo measured **6.4 ms**
 mean propagation across two ECS tasks under sustained load with this
